@@ -16,7 +16,7 @@ let ytExtraArgs = [];
 if (process.env.YT_COOKIES_B64) {
   fs.writeFileSync(COOKIES_PATH, Buffer.from(process.env.YT_COOKIES_B64, 'base64'));
   ytCookiesArgs = ['--cookies', COOKIES_PATH];
-  ytExtraArgs = ['--cookies', COOKIES_PATH, '--extractor-args', 'youtube:player_client=ios,default'];
+  ytExtraArgs = ['--cookies', COOKIES_PATH, '--extractor-args', 'youtube:player_client=ios,web'];
   console.log('  🍪 YouTube cookies loaded');
 }
 
@@ -77,13 +77,13 @@ app.get('/api/debug-ytdlp', (req, res) => {
   proc.stdout.on('data', d => { out += d; });
   proc.on('close', () => {
     const version = out.trim();
-    const fmtArgs = ['--list-formats', '--no-warnings', ...ytExtraArgs, `https://www.youtube.com/watch?v=${vid}`];
+    const fmtArgs = ['--list-formats', '--no-warnings', '--extractor-args', 'youtube:player_client=ios,web', ...ytCookiesArgs, `https://www.youtube.com/watch?v=${vid}`];
     const proc2 = spawn('yt-dlp', fmtArgs);
     let out2 = '', err2 = '';
     proc2.stdout.on('data', d => { out2 += d; });
     proc2.stderr.on('data', d => { err2 += d; });
     proc2.on('close', () => {
-      res.json({ version, formats: out2.trim(), stderr: err2.trim(), cookiesLoaded: ytCookiesArgs.length > 0 });
+      res.json({ version, args: fmtArgs, formats: out2.trim(), stderr: err2.trim(), cookiesLoaded: ytCookiesArgs.length > 0 });
     });
   });
 });
