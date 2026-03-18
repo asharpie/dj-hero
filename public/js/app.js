@@ -80,7 +80,7 @@
   function renderSongList() {
     var container = $('#songs-list');
     if (songs.length === 0) {
-      container.innerHTML = '<p class="empty-msg">No songs yet \u2014 search and download to get started!</p>';
+      container.innerHTML = '<p class=\"empty-msg\">Search above and hit \\u25B6 Play to start!</p>';
       return;
     }
 
@@ -135,6 +135,9 @@
         return;
       }
 
+      // Store search results for play buttons
+      var searchResults = results;
+
       container.innerHTML = results.map(function (r, i) {
         var thumbUrl = r.thumbnail ? escapeHtml(r.thumbnail) : '';
         var thumbImg = thumbUrl
@@ -146,14 +149,15 @@
             '<div class="search-result-title">' + escapeHtml(r.title) + '</div>' +
             '<div class="search-result-meta">' + escapeHtml(r.channel) + ' \u00B7 ' + (r.durationStr || '?:??') + '</div>' +
           '</div>' +
-          '<button class="btn-dl" data-url="' + escapeHtml(r.url) + '" data-title="' + escapeHtml(r.title) + '">Download</button>' +
+          '<button class="btn-play-stream" data-idx="' + i + '">\u25B6 Play</button>' +
         '</div>';
       }).join('');
 
-      container.querySelectorAll('.btn-dl').forEach(function (btn) {
+      container.querySelectorAll('.btn-play-stream').forEach(function (btn) {
         btn.addEventListener('click', function (e) {
           e.stopPropagation();
-          downloadSong(btn.dataset.url, btn.dataset.title, btn);
+          var r = searchResults[parseInt(btn.dataset.idx)];
+          streamAndPlay(r.id, r.title, r.thumbnail, r.duration);
         });
       });
     } catch (e) {
@@ -161,70 +165,18 @@
     }
   }
 
-  async function downloadSong(url, title, btn) {
-    btn.disabled = true;
-    btn.textContent = '...';
-
-    try {
-      var res = await fetch('/api/download', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: url, title: title }),
-      });
-      var data = await res.json();
-      var downloadId = data.downloadId;
-
-      var checkStatus = async function () {
-        try {
-          var statusRes = await fetch('/api/download/' + downloadId);
-          var status = await statusRes.json();
-
-          if (status.status === 'complete') {
-            btn.textContent = '\u2713';
-            toast('Downloaded: ' + title, 'success');
-            loadSongs();
-          } else if (status.status === 'error') {
-            // Server-side download failed — offer file upload
-            btn.textContent = 'Upload';
-            btn.disabled = false;
-            toast('Server can\'t download — use the Upload button in the library', 'error');
-          } else {
-            btn.textContent = '\u2193\u2193\u2193';
-            setTimeout(checkStatus, 2000);
-          }
-        } catch (e) {
-          btn.textContent = 'Error';
-          btn.disabled = false;
-        }
-      };
-
-      setTimeout(checkStatus, 2000);
-    } catch (e) {
-      btn.textContent = 'Error';
-      btn.disabled = false;
-      toast('Download failed', 'error');
-    }
-  }
-
-  // Upload a local MP3 file
-  async function uploadLocalFile(file) {
-    var title = file.name.replace(/\.[^.]+$/, '');
-    toast('Uploading: ' + title + '...', 'success');
-    var formData = new FormData();
-    formData.append('audio', file);
-    formData.append('title', title);
-    try {
-      var res = await fetch('/api/upload', { method: 'POST', body: formData });
-      var data = await res.json();
-      if (data.success) {
-        toast('Uploaded: ' + title, 'success');
-        loadSongs();
-      } else {
-        toast('Upload failed: ' + (data.error || 'unknown'), 'error');
-      }
-    } catch (e) {
-      toast('Upload failed', 'error');
-    }
+  // Stream a YouTube song and launch the game directly
+  function streamAndPlay(videoId, title, thumbnail, durationSec) {
+    var streamSong = {
+      filename: videoId + '.mp3',
+      title: title,
+      size: 0,
+      videoId: videoId,
+      thumbnail: thumbnail || null,
+      durationHint: durationSec || 0,
+    };
+    currentSong = streamSong;
+    startGame(streamSong);
   }
 
   // ═══════════════════════ SETUP SCREEN ═══════════════════════
@@ -260,9 +212,8 @@
 
   // ═══════════════════════ GAME FLOW ═══════════════════════
 
-  async function startGame() {
-    var idx = selectedSongIdx;
-    var song = songs[idx];
+  async function startGame(overrideSong) {
+    var song = overrideSong || songs[selectedSongIdx];
 
     if (!song) {
       toast('Please select a song', 'error');
@@ -284,20 +235,28 @@
     pauseMenu.classList.add('hidden');
 
     try {
-      // Initialize audio
-      audioEngine = new AudioEngine();
-      audioEngine.init();
       analyzer = new AudioAnalyzer();
+      var analysis, duration;
 
-      // Load audio
-      var buffer = await audioEngine.load(song.url);
+      if (song.videoId) {
+        // ─── YouTube streaming mode ───
+        audioEngine = new YouTubeAudioEngine();
+        audioEngine.init();
+        await audioEngine.load(song.videoId);
 
-      // Analyze track
-      var analysis = await analyzer.analyze(buffer);
+        duration = audioEngine.getDuration() || song.durationHint || 180;
+        analysis = analyzer.analyzeAlgorithmic(duration);
+      } else {
+        // ─── Library mode (local/cloud audio file) ───
+        audioEngine = new AudioEngine();
+        audioEngine.init();
+        var buffer = await audioEngine.load(song.url);
+        analysis = await analyzer.analyze(buffer);
+        duration = analysis.duration;
+      }
 
       // Generate beatmap
       var beatmap = analyzer.generateBeatmap(analysis, difficulty);
-      var duration = analysis.duration;
 
       // Setup game
       var canvas = $('#game-canvas');
@@ -606,15 +565,6 @@
       if (e.key === 'Enter') {
         var query = e.target.value.trim();
         if (query) searchYouTube(query);
-      }
-    });
-
-    // Library: upload MP3
-    $('#upload-mp3').addEventListener('change', function () {
-      var file = this.files[0];
-      if (file) {
-        uploadLocalFile(file);
-        this.value = '';
       }
     });
 

@@ -9,19 +9,8 @@ const os = require('os');
 // ─── Cloud mode detection ──────────────────────────
 const USE_CLOUD = !!(process.env.MONGODB_URI && process.env.R2_ENDPOINT);
 
-// ─── YouTube cookies (base64-encoded in env var) ───
-const COOKIES_PATH = path.join(os.tmpdir(), 'yt-cookies.txt');
-let ytCookiesArgs = [];
-let ytExtraArgs = [];
-if (process.env.YT_COOKIES_B64) {
-  fs.writeFileSync(COOKIES_PATH, Buffer.from(process.env.YT_COOKIES_B64, 'base64'));
-  ytCookiesArgs = ['--cookies', COOKIES_PATH];
-  ytExtraArgs = ['--cookies', COOKIES_PATH, '--extractor-args', 'youtube:player_client=android'];
-  console.log('  🍪 YouTube cookies loaded');
-}
-
 const app = express();
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json());
 
 // CORS: allow Vercel frontend in production, permissive in dev
 const FRONTEND_URL = process.env.FRONTEND_URL || '*';
@@ -68,26 +57,6 @@ async function initCloud() {
 
 const downloads = new Map();
 
-// Debug endpoint: check yt-dlp version and formats
-app.get('/api/debug-ytdlp', (req, res) => {
-  const vid = req.query.v || 'ekuwEd6iLU8';
-  const args = ['--version'];
-  const proc = spawn('yt-dlp', args);
-  let out = '';
-  proc.stdout.on('data', d => { out += d; });
-  proc.on('close', () => {
-    const version = out.trim();
-    const fmtArgs = ['--list-formats', '--no-warnings', '--extractor-args', 'youtube:player_client=android', ...ytCookiesArgs, `https://www.youtube.com/watch?v=${vid}`];
-    const proc2 = spawn('yt-dlp', fmtArgs);
-    let out2 = '', err2 = '';
-    proc2.stdout.on('data', d => { out2 += d; });
-    proc2.stderr.on('data', d => { err2 += d; });
-    proc2.on('close', () => {
-      res.json({ version, args: fmtArgs, formats: out2.trim(), stderr: err2.trim(), cookiesLoaded: ytCookiesArgs.length > 0 });
-    });
-  });
-});
-
 // Search YouTube via yt-dlp
 app.get('/api/search', (req, res) => {
   const query = req.query.q;
@@ -100,8 +69,7 @@ app.get('/api/search', (req, res) => {
     '--dump-json',
     '--flat-playlist',
     '--no-download',
-    '--no-warnings',
-    ...ytExtraArgs,
+    '--no-warnings'
   ]);
 
   let output = '';
@@ -146,8 +114,8 @@ app.get('/api/search', (req, res) => {
 });
 
 // Download a song from YouTube
-app.post('/api/download', async (req, res) => {
-  const { url, title, thumbnail } = req.body;
+app.post('/api/download', (req, res) => {
+  const { url, title } = req.body;
   if (!url || typeof url !== 'string') {
     return res.status(400).json({ error: 'URL required' });
   }
@@ -157,156 +125,52 @@ app.post('/api/download', async (req, res) => {
     .trim()
     .substring(0, 100) || 'download';
 
+  // Download to either songs/ (local) or /tmp (cloud)
+  const destDir = USE_CLOUD ? fs.mkdtempSync(path.join(os.tmpdir(), 'djhero-')) : SONGS_DIR;
+  const outputPath = path.join(destDir, `${safeName}.%(ext)s`);
   const downloadId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
-  if (USE_CLOUD) {
-    // Cloud mode: queue for local worker to pick up
-    const job = {
-      downloadId,
-      url,
-      title: safeName,
-      thumbnail: thumbnail || null,
-      status: 'pending',
-      createdAt: new Date(),
-    };
-    await mongoDb.collection('download_queue').insertOne(job);
-    downloads.set(downloadId, { status: 'pending', title: safeName });
-    console.log(`  📋 Queued download: "${safeName}" (${downloadId})`);
-  } else {
-    // Local mode: download directly with yt-dlp
-    downloads.set(downloadId, { status: 'downloading', title: safeName, startedAt: Date.now() });
-    const outputPath = path.join(SONGS_DIR, `${safeName}.%(ext)s`);
-    const proc = spawn('yt-dlp', [
-      '-x', '--audio-format', 'mp3',
-      '--write-thumbnail', '--convert-thumbnails', 'jpg',
-      '-o', outputPath,
-      '--no-playlist', '--no-warnings', '--no-simulate', '--no-check-certificates',
-      ...ytExtraArgs, url
-    ]);
-    let stderr = '';
-    proc.stderr.on('data', (data) => { stderr += data.toString(); });
-    proc.on('close', (code) => {
-      if (code !== 0) {
-        downloads.set(downloadId, { status: 'error', title: safeName, error: stderr });
-      } else {
-        downloads.set(downloadId, { status: 'complete', title: safeName });
-      }
-    });
-  }
+  downloads.set(downloadId, { status: 'downloading', title: safeName, startedAt: Date.now() });
 
-  res.json({ downloadId, title: safeName });
-});
+  const proc = spawn('yt-dlp', [
+    '-x',
+    '--audio-format', 'mp3',
+    '--audio-quality', '0',
+    '--write-thumbnail',
+    '--convert-thumbnails', 'jpg',
+    '-o', outputPath,
+    '--no-playlist',
+    '--no-warnings',
+    '--no-simulate',
+    url
+  ]);
 
-// ─── Worker endpoints (for local machine to process download queue) ───
-const WORKER_SECRET = process.env.WORKER_SECRET || 'djhero-worker-default';
+  let stderr = '';
+  proc.stderr.on('data', (data) => { stderr += data.toString(); });
 
-function checkWorkerAuth(req, res) {
-  const auth = req.headers.authorization;
-  if (auth !== `Bearer ${WORKER_SECRET}`) {
-    res.status(401).json({ error: 'Unauthorized' });
-    return false;
-  }
-  return true;
-}
-
-// Worker: get next pending download job
-app.get('/api/worker/pending', async (req, res) => {
-  if (!checkWorkerAuth(req, res)) return;
-  if (!USE_CLOUD) return res.json({ job: null });
-
-  const job = await mongoDb.collection('download_queue').findOneAndUpdate(
-    { status: 'pending' },
-    { $set: { status: 'downloading', claimedAt: new Date() } },
-    { sort: { createdAt: 1 }, returnDocument: 'after' }
-  );
-  res.json({ job: job || null });
-});
-
-// Worker: submit completed download
-app.post('/api/worker/complete', upload.single('audio'), async (req, res) => {
-  if (!checkWorkerAuth(req, res)) return;
-  if (!USE_CLOUD || !req.file) return res.status(400).json({ error: 'Missing file' });
-
-  const { downloadId, title } = req.body;
-  if (!downloadId) return res.status(400).json({ error: 'Missing downloadId' });
-
-  const safeName = (title || 'upload').replace(/[^a-zA-Z0-9\s\-_().&]/g, '').trim().substring(0, 100);
-  const filename = `${safeName}.mp3`;
-
-  try {
-    const { PutObjectCommand } = require('@aws-sdk/client-s3');
-    const mp3Buffer = fs.readFileSync(req.file.path);
-
-    // Upload MP3 to R2
-    await s3Client.send(new PutObjectCommand({
-      Bucket: R2_BUCKET,
-      Key: `songs/${filename}`,
-      Body: mp3Buffer,
-      ContentType: 'audio/mpeg',
-    }));
-
-    // Upload thumbnail if provided
-    let thumbnailPath = null;
-    if (req.body.thumbnailData) {
-      const thumbBuffer = Buffer.from(req.body.thumbnailData, 'base64');
-      const thumbKey = `thumbnails/${safeName}.jpg`;
-      await s3Client.send(new PutObjectCommand({
-        Bucket: R2_BUCKET,
-        Key: thumbKey,
-        Body: thumbBuffer,
-        ContentType: 'image/jpeg',
-      }));
-      thumbnailPath = `/api/stream/${thumbKey}`;
+  proc.on('close', async (code) => {
+    if (code !== 0) {
+      downloads.set(downloadId, { status: 'error', title: safeName, error: stderr });
+      return;
     }
 
-    // Save to MongoDB
-    const songDoc = {
-      filename,
-      title: safeName,
-      size: mp3Buffer.length,
-      url: `/api/stream/songs/${encodeURIComponent(filename)}`,
-      thumbnail: thumbnailPath,
-      createdAt: new Date(),
-    };
-    await mongoDb.collection('songs').updateOne(
-      { filename },
-      { $set: songDoc },
-      { upsert: true }
-    );
+    if (USE_CLOUD) {
+      try {
+        await uploadToCloud(destDir, safeName);
+        downloads.set(downloadId, { status: 'complete', title: safeName });
+      } catch (e) {
+        downloads.set(downloadId, { status: 'error', title: safeName, error: e.message });
+      } finally {
+        // Clean up temp files
+        fs.readdirSync(destDir).forEach(f => fs.unlinkSync(path.join(destDir, f)));
+        fs.rmdirSync(destDir);
+      }
+    } else {
+      downloads.set(downloadId, { status: 'complete', title: safeName });
+    }
+  });
 
-    // Update queue + in-memory status
-    await mongoDb.collection('download_queue').updateOne(
-      { downloadId },
-      { $set: { status: 'complete', completedAt: new Date() } }
-    );
-    downloads.set(downloadId, { status: 'complete', title: safeName });
-
-    fs.unlinkSync(req.file.path);
-    console.log(`  ✅ Worker completed: "${safeName}" (${(mp3Buffer.length / 1048576).toFixed(1)} MB)`);
-    res.json({ success: true });
-  } catch (e) {
-    try { fs.unlinkSync(req.file.path); } catch (_) {}
-    // Mark as error so it can be retried
-    await mongoDb.collection('download_queue').updateOne(
-      { downloadId },
-      { $set: { status: 'pending', error: e.message } }
-    ).catch(() => {});
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Worker: report error on a job
-app.post('/api/worker/error', async (req, res) => {
-  if (!checkWorkerAuth(req, res)) return;
-  const { downloadId, error } = req.body;
-  if (downloadId) {
-    await mongoDb.collection('download_queue').updateOne(
-      { downloadId },
-      { $set: { status: 'error', error: error || 'Unknown error' } }
-    ).catch(() => {});
-    downloads.set(downloadId, { status: 'error', title: '', error: error || 'Download failed' });
-  }
-  res.json({ ok: true });
+  res.json({ downloadId, title: safeName });
 });
 
 // Upload downloaded files to R2 + save metadata to MongoDB
@@ -346,8 +210,8 @@ async function uploadToCloud(dir, safeName) {
     filename: mp3File,
     title: path.parse(mp3File).name,
     size: mp3Buffer.length,
-    url: `/api/stream/songs/${encodeURIComponent(mp3File)}`,
-    thumbnail: thumbnailUrl ? thumbnailUrl.replace(R2_PUBLIC_URL + '/', '/api/stream/') : null,
+    url: `${R2_PUBLIC_URL}/songs/${encodeURIComponent(mp3File)}`,
+    thumbnail: thumbnailUrl,
     createdAt: new Date(),
   };
   await mongoDb.collection('songs').updateOne(
@@ -357,84 +221,11 @@ async function uploadToCloud(dir, safeName) {
   );
 }
 
-// ─── Stream files from R2 via proxy (avoids CORS / public-access issues) ───
-app.get('/api/stream/*', async (req, res) => {
-  if (!USE_CLOUD) return res.status(404).end();
-  const key = req.params[0];
-  if (!key || key.includes('..')) return res.status(400).end();
-  try {
-    const { GetObjectCommand } = require('@aws-sdk/client-s3');
-    const result = await s3Client.send(new GetObjectCommand({ Bucket: R2_BUCKET, Key: key }));
-    if (result.ContentType) res.set('Content-Type', result.ContentType);
-    if (result.ContentLength) res.set('Content-Length', String(result.ContentLength));
-    res.set('Cache-Control', 'public, max-age=86400');
-    result.Body.pipe(res);
-  } catch (e) {
-    res.status(404).end();
-  }
-});
-
 // Check download status
-app.get('/api/download/:id', async (req, res) => {
-  // Check in-memory first (fast path)
-  const memDownload = downloads.get(req.params.id);
-  if (memDownload) return res.json(memDownload);
-
-  // Check MongoDB queue (cloud mode)
-  if (USE_CLOUD) {
-    const job = await mongoDb.collection('download_queue').findOne({ downloadId: req.params.id });
-    if (job) return res.json({ status: job.status, title: job.title, error: job.error || undefined });
-  }
-
-  res.status(404).json({ error: 'Download not found' });
-});
-
-// Upload MP3 file directly (for when yt-dlp can't run on server)
-const multer = require('multer');
-const upload = multer({ dest: os.tmpdir(), limits: { fileSize: 50 * 1024 * 1024 } });
-app.post('/api/upload', upload.single('audio'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  const title = (req.body.title || 'Unknown').replace(/[^a-zA-Z0-9\s\-_().&]/g, '').trim().substring(0, 100) || 'upload';
-  const filename = `${title}.mp3`;
-
-  if (USE_CLOUD) {
-    try {
-      const { PutObjectCommand } = require('@aws-sdk/client-s3');
-      const mp3Buffer = fs.readFileSync(req.file.path);
-
-      await s3Client.send(new PutObjectCommand({
-        Bucket: R2_BUCKET,
-        Key: `songs/${filename}`,
-        Body: mp3Buffer,
-        ContentType: 'audio/mpeg',
-      }));
-
-      const songDoc = {
-        filename,
-        title,
-        size: mp3Buffer.length,
-        url: `/api/stream/songs/${encodeURIComponent(filename)}`,
-        thumbnail: null,
-        createdAt: new Date(),
-      };
-      await mongoDb.collection('songs').updateOne(
-        { filename },
-        { $set: songDoc },
-        { upsert: true }
-      );
-
-      fs.unlinkSync(req.file.path);
-      res.json({ success: true, title });
-    } catch (e) {
-      try { fs.unlinkSync(req.file.path); } catch (_) {}
-      res.status(500).json({ error: e.message });
-    }
-  } else {
-    // Local mode: move file to songs dir
-    const dest = path.join(SONGS_DIR, filename);
-    fs.renameSync(req.file.path, dest);
-    res.json({ success: true, title });
-  }
+app.get('/api/download/:id', (req, res) => {
+  const download = downloads.get(req.params.id);
+  if (!download) return res.status(404).json({ error: 'Download not found' });
+  res.json(download);
 });
 
 // List all songs
@@ -446,12 +237,8 @@ app.get('/api/songs', async (req, res) => {
         filename: s.filename,
         title: s.title,
         size: s.size,
-        url: s.url && R2_PUBLIC_URL && s.url.startsWith(R2_PUBLIC_URL)
-          ? s.url.replace(R2_PUBLIC_URL + '/', '/api/stream/')
-          : s.url,
-        thumbnail: s.thumbnail && R2_PUBLIC_URL && s.thumbnail.startsWith(R2_PUBLIC_URL)
-          ? s.thumbnail.replace(R2_PUBLIC_URL + '/', '/api/stream/')
-          : s.thumbnail,
+        url: s.url,
+        thumbnail: s.thumbnail,
       })));
     } catch (e) {
       res.json([]);
@@ -524,7 +311,7 @@ app.post('/api/fetch-thumbnail', async (req, res) => {
           { title: safeName },
           { $set: { thumbnail: publicThumbUrl } }
         );
-        res.json({ thumbnail: `/api/stream/${thumbKey}` });
+        res.json({ thumbnail: publicThumbUrl });
       } catch (e) {
         res.json({ thumbnail: null });
       }
@@ -547,8 +334,7 @@ app.post('/api/fetch-thumbnail', async (req, res) => {
     '--dump-json',
     '--flat-playlist',
     '--no-download',
-    '--no-warnings',
-    ...ytExtraArgs,
+    '--no-warnings'
   ]);
 
   let output = '';
@@ -660,8 +446,7 @@ function fetchThumbFromYT(title, cb) {
     '--dump-json',
     '--flat-playlist',
     '--no-download',
-    '--no-warnings',
-    ...ytExtraArgs,
+    '--no-warnings'
   ]);
 
   let output = '';

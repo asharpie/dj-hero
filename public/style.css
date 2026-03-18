@@ -189,7 +189,8 @@ button {
   color: var(--text-dim);
   margin-top: 2px;
 }
-.search-result-item .btn-dl {
+.search-result-item .btn-dl,
+.search-result-item .btn-play-stream {
   background: var(--green);
   color: #000;
   padding: 6px 14px;
@@ -199,8 +200,10 @@ button {
   white-space: nowrap;
   flex-shrink: 0;
 }
-.search-result-item .btn-dl:hover { filter: brightness(1.2); }
-.search-result-item .btn-dl:disabled { opacity: 0.4; cursor: not-allowed; }
+.search-result-item .btn-dl:hover,
+.search-result-item .btn-play-stream:hover { filter: brightness(1.2); }
+.search-result-item .btn-dl:disabled,
+.search-result-item .btn-play-stream:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* Song list */
 .songs-list { display: flex; flex-direction: column; gap: 6px; }

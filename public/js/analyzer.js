@@ -197,6 +197,57 @@ class AudioAnalyzer {
     return sections;
   }
 
+  // ═══════════════════════ ALGORITHMIC ANALYSIS (no AudioBuffer) ═══
+
+  // Generate a synthetic analysis when we only know duration (e.g. YouTube stream)
+  analyzeAlgorithmic(duration, bpm) {
+    bpm = bpm || 120;
+
+    // Generate beat grid
+    const beatInterval = 60 / bpm;
+    const beats = [];
+    let t = beatInterval * 0.5; // small offset so notes don't start at t=0
+    while (t < duration) {
+      beats.push(Math.round(t * 1000) / 1000);
+      t += beatInterval;
+    }
+
+    // Generate sections with varying intensity using a hash of the beat index
+    const beatsPerSection = 16;
+    const sections = [];
+    const sectionCount = Math.ceil(beats.length / beatsPerSection);
+
+    // Create an interesting energy curve: intro → build → drop → bridge → drop → outro
+    for (let i = 0; i < sectionCount; i++) {
+      const startIdx = i * beatsPerSection;
+      const endIdx = Math.min(startIdx + beatsPerSection - 1, beats.length - 1);
+      const progress = i / Math.max(sectionCount - 1, 1); // 0..1
+
+      // Energy curve: low start, build to peak at ~35%, dip at ~55%, peak again at ~75%, fadeout
+      let energy;
+      if (progress < 0.15) energy = 0.2 + progress * 2;        // intro
+      else if (progress < 0.35) energy = 0.5 + (progress - 0.15) * 2.5; // build
+      else if (progress < 0.55) energy = 1.0;                   // drop (high)
+      else if (progress < 0.65) energy = 0.3 + Math.random() * 0.2; // breakdown
+      else if (progress < 0.85) energy = 0.9 + Math.random() * 0.1; // second drop
+      else energy = 0.6 * (1 - (progress - 0.85) / 0.15);       // outro
+
+      energy = Math.max(0.1, Math.min(1, energy));
+
+      sections.push({
+        startTime: beats[startIdx],
+        endTime: beats[endIdx],
+        energy: energy,
+        normalizedEnergy: energy,
+        startBeat: startIdx,
+        endBeat: endIdx,
+        intensity: energy > 0.65 ? 'high' : energy > 0.3 ? 'medium' : 'low',
+      });
+    }
+
+    return { bpm, beats, sections, duration };
+  }
+
   // ═══════════════════════ BEATMAP GENERATION ═══════════════════════
 
   generateBeatmap(analysis, difficulty) {
