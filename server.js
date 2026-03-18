@@ -38,6 +38,8 @@ async function initCloud() {
   await client.connect();
   mongoDb = client.db(process.env.MONGODB_DB || 'djhero');
   await mongoDb.collection('songs').createIndex({ filename: 1 }, { unique: true }).catch(() => {});
+  await mongoDb.collection('users').createIndex({ email: 1 }, { unique: true }).catch(() => {});
+  await mongoDb.collection('users').createIndex({ username: 1 }, { unique: true }).catch(() => {});
   console.log('  ☁️  MongoDB connected');
 
   // Cloudflare R2
@@ -56,6 +58,130 @@ async function initCloud() {
 }
 
 const downloads = new Map();
+
+// ═══════════════════════ AUTHENTICATION ═══════════════════════
+
+const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
+
+// In-memory session store (stateless tokens)
+const sessions = new Map();
+
+function generateToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+// Middleware to optionally attach user from token
+function optionalAuth(req, res, next) {
+  const token = req.headers['x-auth-token'];
+  if (token && sessions.has(token)) {
+    req.user = sessions.get(token);
+  }
+  next();
+}
+
+app.use(optionalAuth);
+
+// Sign up
+app.post('/api/auth/signup', async (req, res) => {
+  const { email, username, password } = req.body;
+  if (!email || !username || !password) {
+    return res.status(400).json({ error: 'Email, username and password are required' });
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ error: 'Invalid email address' });
+  }
+  if (username.length < 2 || username.length > 20) {
+    return res.status(400).json({ error: 'Username must be 2-20 characters' });
+  }
+  if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+    return res.status(400).json({ error: 'Username can only contain letters, numbers and underscores' });
+  }
+  if (password.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  }
+
+  if (USE_CLOUD) {
+    const users = mongoDb.collection('users');
+    const existing = await users.findOne({ $or: [{ email: email.toLowerCase() }, { username }] });
+    if (existing) {
+      if (existing.email === email.toLowerCase()) return res.status(409).json({ error: 'Email already registered' });
+      return res.status(409).json({ error: 'Username already taken' });
+    }
+    const hash = await bcrypt.hash(password, 10);
+    await users.insertOne({
+      email: email.toLowerCase(),
+      username,
+      passwordHash: hash,
+      createdAt: new Date().toISOString(),
+    });
+    const token = generateToken();
+    sessions.set(token, { username, email: email.toLowerCase() });
+    return res.json({ token, username, email: email.toLowerCase() });
+  }
+
+  // Local mode – simple JSON file
+  const usersFile = path.join(DATA_DIR, 'users.json');
+  const users = readJSON(usersFile, []);
+  if (users.find(u => u.email === email.toLowerCase())) return res.status(409).json({ error: 'Email already registered' });
+  if (users.find(u => u.username === username)) return res.status(409).json({ error: 'Username already taken' });
+  const hash = await bcrypt.hash(password, 10);
+  users.push({ email: email.toLowerCase(), username, passwordHash: hash, createdAt: new Date().toISOString() });
+  writeJSON(usersFile, users);
+  const token = generateToken();
+  sessions.set(token, { username, email: email.toLowerCase() });
+  res.json({ token, username, email: email.toLowerCase() });
+});
+
+// Login
+app.post('/api/auth/login', async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email and password are required' });
+  }
+
+  let user;
+  if (USE_CLOUD) {
+    user = await mongoDb.collection('users').findOne({ email: email.toLowerCase() });
+  } else {
+    const usersFile = path.join(DATA_DIR, 'users.json');
+    const users = readJSON(usersFile, []);
+    user = users.find(u => u.email === email.toLowerCase());
+  }
+
+  if (!user) return res.status(401).json({ error: 'No account found with that email' });
+  const valid = await bcrypt.compare(password, user.passwordHash);
+  if (!valid) return res.status(401).json({ error: 'Incorrect password' });
+
+  const token = generateToken();
+  sessions.set(token, { username: user.username, email: user.email });
+  res.json({ token, username: user.username, email: user.email });
+});
+
+// Account recovery – sends credentials info (simplified; real app would email)
+app.post('/api/auth/recover', async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: 'Email is required' });
+
+  let user;
+  if (USE_CLOUD) {
+    user = await mongoDb.collection('users').findOne({ email: email.toLowerCase() });
+  } else {
+    const usersFile = path.join(DATA_DIR, 'users.json');
+    const users = readJSON(usersFile, []);
+    user = users.find(u => u.email === email.toLowerCase());
+  }
+
+  if (!user) return res.status(404).json({ error: 'No account found with that email' });
+  // In production, send an email. For now, return the username.
+  res.json({ message: 'Your username is: ' + user.username + '. Please use a new password next time you sign up, or contact support.' });
+});
+
+// Verify token (check if still logged in)
+app.get('/api/auth/me', (req, res) => {
+  if (req.user) return res.json({ username: req.user.username, email: req.user.email });
+  res.status(401).json({ error: 'Not logged in' });
+});
 
 // Search YouTube via yt-dlp
 app.get('/api/search', (req, res) => {
@@ -517,8 +643,14 @@ app.post('/api/leaderboard', async (req, res) => {
     return res.status(400).json({ error: 'Invalid submission' });
   }
 
+  // Guests can play but scores are not saved
+  if (!req.user) {
+    return res.json({ rank: 0, totalScores: 0, isPersonalBest: false, guest: true });
+  }
+
+  const username = req.user.username;
   const key = songFilename || songTitle;
-  const entry = { score, grade, accuracy, maxCombo, hits, difficulty, date: new Date().toISOString() };
+  const entry = { score, grade, accuracy, maxCombo, hits, difficulty, username, date: new Date().toISOString() };
 
   if (USE_CLOUD) {
     const col = mongoDb.collection('leaderboard');
@@ -537,11 +669,12 @@ app.post('/api/leaderboard', async (req, res) => {
       $push: { scores: { $each: [entry], $sort: { score: -1 }, $slice: 20 } }
     });
 
-    // Update personal best
-    const pb = await pbCol.findOne({ key });
+    // Update personal best (per user per song)
+    const pbKey = username + ':' + key;
+    const pb = await pbCol.findOne({ key: pbKey });
     const isPersonalBest = !pb || score > pb.score;
     if (isPersonalBest) {
-      await pbCol.updateOne({ key }, { $set: { key, songTitle, ...entry } }, { upsert: true });
+      await pbCol.updateOne({ key: pbKey }, { $set: { key: pbKey, songKey: key, username, songTitle, ...entry } }, { upsert: true });
     }
 
     const updated = await col.findOne({ key });
@@ -557,40 +690,41 @@ app.post('/api/leaderboard', async (req, res) => {
   }
 
   leaderboard[key].plays++;
-  leaderboard[key].songTitle = songTitle; // keep title fresh
+  leaderboard[key].songTitle = songTitle;
 
   leaderboard[key].scores.push(entry);
-  // Keep top 20 scores per song
   leaderboard[key].scores.sort((a, b) => b.score - a.score);
   leaderboard[key].scores = leaderboard[key].scores.slice(0, 20);
 
   writeJSON(LEADERBOARD_FILE, leaderboard);
 
-  // Update personal best
+  // Update personal best (per user)
   const personalBest = readJSON(PERSONAL_BEST_FILE, {});
-  if (!personalBest[key] || score > personalBest[key].score) {
-    personalBest[key] = { songTitle, ...entry };
+  const pbKey = username + ':' + key;
+  if (!personalBest[pbKey] || score > personalBest[pbKey].score) {
+    personalBest[pbKey] = { songTitle, username, ...entry };
     writeJSON(PERSONAL_BEST_FILE, personalBest);
   }
 
-  // Return rank info
   const rank = leaderboard[key].scores.findIndex(s => s.score === score && s.date === entry.date) + 1;
-  const isPersonalBest = personalBest[key].date === entry.date;
+  const isPersonalBest = personalBest[pbKey].date === entry.date;
 
   res.json({ rank, totalScores: leaderboard[key].scores.length, isPersonalBest });
 });
 
-// Get personal best for a song
+// Get personal best for a song (per user)
 app.get('/api/personal-best/:key', async (req, res) => {
-  const key = decodeURIComponent(req.params.key);
+  const songKey = decodeURIComponent(req.params.key);
+  if (!req.user) return res.json(null);
+  const pbKey = req.user.username + ':' + songKey;
 
   if (USE_CLOUD) {
-    const pb = await mongoDb.collection('personal_bests').findOne({ key });
+    const pb = await mongoDb.collection('personal_bests').findOne({ key: pbKey });
     return res.json(pb || null);
   }
 
   const personalBest = readJSON(PERSONAL_BEST_FILE, {});
-  res.json(personalBest[key] || null);
+  res.json(personalBest[pbKey] || null);
 });
 
 // Get leaderboard for a specific song
@@ -623,6 +757,8 @@ app.get('/api/leaderboard', async (req, res) => {
       plays: d.plays,
       topScore: d.scores && d.scores.length > 0 ? d.scores[0].score : 0,
       topGrade: d.scores && d.scores.length > 0 ? d.scores[0].grade : '-',
+      topUser: d.scores && d.scores.length > 0 ? (d.scores[0].username || 'Guest') : '-',
+      top3: (d.scores || []).slice(0, 3).map(s => ({ score: s.score, grade: s.grade, username: s.username || 'Guest' })),
     })));
   }
 
@@ -635,6 +771,8 @@ app.get('/api/leaderboard', async (req, res) => {
     plays: data.plays,
     topScore: data.scores.length > 0 ? data.scores[0].score : 0,
     topGrade: data.scores.length > 0 ? data.scores[0].grade : '-',
+    topUser: data.scores.length > 0 ? (data.scores[0].username || 'Guest') : '-',
+    top3: data.scores.slice(0, 3).map(s => ({ score: s.score, grade: s.grade, username: s.username || 'Guest' })),
   }));
 
   if (search) {

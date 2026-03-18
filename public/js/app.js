@@ -12,10 +12,22 @@
   let analyzer = null;
   let game = null;
   let currentSong = null; // track which song is being played
+  let currentUser = null; // { username, email } or null for guest
+
+  // ─── Auth helpers ────────────────────────────────
+  function getToken() { return localStorage.getItem('djhero_token'); }
+  function setToken(t) { if (t) localStorage.setItem('djhero_token', t); else localStorage.removeItem('djhero_token'); }
+  function authHeaders() {
+    var h = { 'Content-Type': 'application/json' };
+    var t = getToken();
+    if (t) h['x-auth-token'] = t;
+    return h;
+  }
 
   // ─── DOM refs ────────────────────────────────────
   const $ = function (sel) { return document.querySelector(sel); };
   const screens = {
+    auth: $('#screen-auth'),
     library: $('#screen-library'),
     setup: $('#screen-setup'),
     game: $('#screen-game'),
@@ -392,17 +404,22 @@
     var compEl = $('#results-comparison');
     compEl.innerHTML = '';
 
+    if (!currentUser) {
+      compEl.innerHTML = '<span class="results-badge badge-rank">Playing as Guest — scores not saved</span>';
+      return;
+    }
+
     if (currentSong) {
       var songKey = currentSong.filename || currentSong.title;
 
       // Fetch personal best first, then submit
-      fetch('/api/personal-best/' + encodeURIComponent(songKey))
+      fetch('/api/personal-best/' + encodeURIComponent(songKey), { headers: authHeaders() })
         .then(function (r) { return r.json(); })
         .then(function (prevBest) {
           // Submit score
           return fetch('/api/leaderboard', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: authHeaders(),
             body: JSON.stringify({
               songTitle: currentSong.title,
               songFilename: currentSong.filename,
@@ -496,7 +513,10 @@
         '</div>' +
         '<div class="lb-song-stats">' +
           '<div class="lb-song-top-score">' + (e.topScore || 0).toLocaleString() + '</div>' +
-          '<div class="lb-song-top-grade">Best: ' + (e.topGrade || '-') + '</div>' +
+          '<div class="lb-song-top-grade">Best: ' + (e.topGrade || '-') + ' <span class="lb-score-username">by ' + escapeHtml(e.topUser || 'Guest') + '</span></div>' +
+          (e.top3 && e.top3.length > 1 ? '<div class="lb-top3">' + e.top3.map(function (t, ti) {
+            return '<span class="lb-top3-entry">' + (ti + 1) + '. ' + escapeHtml(t.username) + ' (' + t.score.toLocaleString() + ')</span>';
+          }).join(' ') + '</div>' : '') +
         '</div>' +
         '<div class="lb-song-actions">' + playBtnHtml + dlBtnHtml + '</div>' +
       '</div>';
@@ -581,26 +601,206 @@
       scoresEl.innerHTML = data.scores.map(function (s, i) {
         var date = new Date(s.date);
         var dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        return '<div class="lb-score-row">' +
+        var user = s.username || 'Guest';
+        var detailHtml = '';
+        if (s.hits) {
+          detailHtml = '<div class="lb-score-detail" id="lb-detail-' + i + '">' +
+            '<div class="detail-grid">' +
+              '<div>Perfect: <span>' + (s.hits.perfect || 0) + '</span></div>' +
+              '<div>Great: <span>' + (s.hits.great || 0) + '</span></div>' +
+              '<div>Good: <span>' + (s.hits.good || 0) + '</span></div>' +
+              '<div>Miss: <span>' + (s.hits.miss || 0) + '</span></div>' +
+              '<div>Max Combo: <span>' + (s.maxCombo || 0) + '</span></div>' +
+              '<div>Accuracy: <span>' + (s.accuracy || 0) + '%</span></div>' +
+            '</div>' +
+          '</div>';
+        }
+        return '<div class="lb-score-row" data-detail="lb-detail-' + i + '">' +
           '<div class="lb-score-rank">#' + (i + 1) + '</div>' +
           '<div class="lb-score-info">' +
-            '<div class="lb-score-value">' + s.score.toLocaleString() + '</div>' +
+            '<div class="lb-score-value">' + s.score.toLocaleString() + ' <span class="lb-score-username">' + escapeHtml(user) + '</span></div>' +
             '<div class="lb-score-details">' +
               s.accuracy + '% · ' + s.maxCombo + ' combo · ' +
               (s.difficulty || '?') + ' · ' + dateStr +
             '</div>' +
           '</div>' +
           '<div class="lb-score-grade" style="color:' + (gradeColors[s.grade] || '#00e5ff') + '">' + s.grade + '</div>' +
-        '</div>';
+        '</div>' + detailHtml;
       }).join('');
+
+      // Expandable score rows
+      scoresEl.querySelectorAll('.lb-score-row').forEach(function (row) {
+        row.addEventListener('click', function () {
+          var detailId = row.dataset.detail;
+          var detail = document.getElementById(detailId);
+          if (detail) detail.classList.toggle('open');
+        });
+      });
     } catch (e) {
       $('#lb-detail-scores').innerHTML = '<p class="lb-empty-msg">Failed to load scores</p>';
     }
   }
 
+  // ═══════════════════════ AUTH LOGIC ═══════════════════════
+
+  function showAuthError(msg) {
+    var el = $('#auth-error');
+    el.textContent = msg;
+    el.classList.remove('hidden');
+  }
+  function hideAuthError() { $('#auth-error').classList.add('hidden'); }
+
+  function enterApp(user) {
+    currentUser = user;
+    if (user) {
+      $('#user-badge').textContent = user.username;
+      $('#btn-logout').style.display = '';
+    } else {
+      $('#user-badge').textContent = 'Guest';
+      $('#btn-logout').textContent = 'Exit Guest';
+      $('#btn-logout').style.display = '';
+    }
+    showScreen('library');
+    loadSongs();
+    loadPopularSongs();
+  }
+
+  async function tryAutoLogin() {
+    var token = getToken();
+    if (!token) return false;
+    try {
+      var res = await fetch('/api/auth/me', { headers: { 'x-auth-token': token } });
+      if (!res.ok) { setToken(null); return false; }
+      var data = await res.json();
+      currentUser = { username: data.username, email: data.email };
+      return true;
+    } catch (e) { setToken(null); return false; }
+  }
+
+  function setupAuthHandlers() {
+    // Tab switching
+    document.querySelectorAll('.auth-tab').forEach(function (tab) {
+      tab.addEventListener('click', function () {
+        document.querySelectorAll('.auth-tab').forEach(function (t) { t.classList.remove('active'); });
+        tab.classList.add('active');
+        hideAuthError();
+        var target = tab.dataset.tab;
+        $('#login-form').classList.toggle('hidden', target !== 'login');
+        $('#signup-form').classList.toggle('hidden', target !== 'signup');
+        $('#recover-form').classList.add('hidden');
+      });
+    });
+
+    // Login
+    $('#login-form').addEventListener('submit', async function (e) {
+      e.preventDefault();
+      hideAuthError();
+      var email = $('#login-email').value.trim();
+      var password = $('#login-password').value;
+      try {
+        var res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email, password: password }),
+        });
+        var data = await res.json();
+        if (!res.ok) { showAuthError(data.error || 'Login failed'); return; }
+        setToken(data.token);
+        enterApp({ username: data.username, email: email });
+      } catch (err) { showAuthError('Connection error'); }
+    });
+
+    // Signup
+    $('#signup-form').addEventListener('submit', async function (e) {
+      e.preventDefault();
+      hideAuthError();
+      var username = $('#signup-username').value.trim();
+      var email = $('#signup-email').value.trim();
+      var password = $('#signup-password').value;
+      try {
+        var res = await fetch('/api/auth/signup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: username, email: email, password: password }),
+        });
+        var data = await res.json();
+        if (!res.ok) { showAuthError(data.error || 'Signup failed'); return; }
+        setToken(data.token);
+        enterApp({ username: data.username, email: email });
+      } catch (err) { showAuthError('Connection error'); }
+    });
+
+    // Forgot
+    $('#btn-forgot').addEventListener('click', function () {
+      hideAuthError();
+      $('#login-form').classList.add('hidden');
+      $('#signup-form').classList.add('hidden');
+      $('#recover-form').classList.remove('hidden');
+      document.querySelectorAll('.auth-tab').forEach(function (t) { t.classList.remove('active'); });
+    });
+
+    // Recover
+    $('#recover-form').addEventListener('submit', async function (e) {
+      e.preventDefault();
+      hideAuthError();
+      var email = $('#recover-email').value.trim();
+      try {
+        var res = await fetch('/api/auth/recover', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email }),
+        });
+        var data = await res.json();
+        var resultEl = $('#recover-result');
+        if (!res.ok) {
+          resultEl.textContent = data.error || 'No account found';
+          resultEl.style.color = 'var(--red)';
+        } else {
+          resultEl.textContent = 'Your username is: ' + data.username + '. Use it to log in with your email.';
+          resultEl.style.color = 'var(--green)';
+        }
+        resultEl.classList.remove('hidden');
+      } catch (err) { showAuthError('Connection error'); }
+    });
+
+    // Back to login from recover
+    $('#btn-back-login').addEventListener('click', function () {
+      hideAuthError();
+      $('#recover-form').classList.add('hidden');
+      $('#recover-result').classList.add('hidden');
+      $('#login-form').classList.remove('hidden');
+      document.querySelectorAll('.auth-tab').forEach(function (t) { t.classList.remove('active'); });
+      document.querySelector('.auth-tab[data-tab="login"]').classList.add('active');
+    });
+
+    // Guest
+    $('#btn-guest').addEventListener('click', function () {
+      setToken(null);
+      enterApp(null);
+    });
+
+    // Logout
+    $('#btn-logout').addEventListener('click', function () {
+      setToken(null);
+      currentUser = null;
+      showScreen('auth');
+    });
+  }
+
   // ═══════════════════════ EVENT WIRING ═══════════════════════
 
   function init() {
+    // Setup auth
+    setupAuthHandlers();
+
+    // Try auto-login
+    tryAutoLogin().then(function (loggedIn) {
+      if (loggedIn) {
+        enterApp(currentUser);
+      }
+      // else stay on auth screen
+    });
+
     // Library: search
     $('#search-btn').addEventListener('click', function () {
       var query = $('#search-input').value.trim();
@@ -685,12 +885,6 @@
       var q = this.value.trim();
       lbDebounce = setTimeout(function () { loadLeaderboard(q); }, 300);
     });
-
-    // Load songs on start
-    loadSongs();
-
-    // Auto-populate search with popular songs
-    loadPopularSongs();
   }
 
   // ─── Utility ─────────────────────────────────────

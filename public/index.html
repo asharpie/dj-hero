@@ -7,11 +7,54 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <!-- ═══════════════════════ AUTH SCREEN ═══════════════════════ -->
+  <div id="screen-auth" class="screen active">
+    <div class="auth-container">
+      <h1 class="logo auth-logo">DJ <span class="accent">HERO</span></h1>
+      <div class="auth-tabs">
+        <button class="auth-tab active" data-tab="login">Login</button>
+        <button class="auth-tab" data-tab="signup">Sign Up</button>
+      </div>
+
+      <form id="login-form" class="auth-form">
+        <input type="email" id="login-email" placeholder="Email" required autocomplete="email">
+        <input type="password" id="login-password" placeholder="Password" required autocomplete="current-password">
+        <button type="submit" class="btn-primary btn-glow">Login</button>
+        <button type="button" id="btn-forgot" class="btn-link">Forgot username/password?</button>
+      </form>
+
+      <form id="signup-form" class="auth-form hidden">
+        <input type="text" id="signup-username" placeholder="Username" required minlength="3" maxlength="20" autocomplete="username">
+        <input type="email" id="signup-email" placeholder="Email" required autocomplete="email">
+        <input type="password" id="signup-password" placeholder="Password (min 6 chars)" required minlength="6" autocomplete="new-password">
+        <button type="submit" class="btn-primary btn-glow">Create Account</button>
+      </form>
+
+      <form id="recover-form" class="auth-form hidden">
+        <p class="auth-hint">Enter your email to recover your account info.</p>
+        <input type="email" id="recover-email" placeholder="Email" required autocomplete="email">
+        <button type="submit" class="btn-primary">Recover</button>
+        <button type="button" id="btn-back-login" class="btn-link">← Back to login</button>
+        <div id="recover-result" class="recover-result hidden"></div>
+      </form>
+
+      <div class="auth-divider"><span>or</span></div>
+      <button id="btn-guest" class="btn-secondary btn-guest">Play as Guest</button>
+      <p class="auth-note">Guests can play but scores won't be saved.</p>
+
+      <div id="auth-error" class="auth-error hidden"></div>
+    </div>
+  </div>
+
   <!-- ═══════════════════════ LIBRARY SCREEN ═══════════════════════ -->
-  <div id="screen-library" class="screen active">
+  <div id="screen-library" class="screen">
     <header class="top-bar">
       <h1 class="logo">DJ <span class="accent">HERO</span></h1>
-      <button id="btn-go-leaderboard" class="btn-secondary btn-sm">🏆 Leaderboard</button>
+      <div class="top-bar-right">
+        <span id="user-badge" class="user-badge"></span>
+        <button id="btn-logout" class="btn-secondary btn-sm">Logout</button>
+        <button id="btn-go-leaderboard" class="btn-secondary btn-sm">🏆 Leaderboard</button>
+      </div>
     </header>
 
     <div class="library-content">
