@@ -12,9 +12,11 @@ const USE_CLOUD = !!(process.env.MONGODB_URI && process.env.R2_ENDPOINT);
 // ─── YouTube cookies (base64-encoded in env var) ───
 const COOKIES_PATH = path.join(os.tmpdir(), 'yt-cookies.txt');
 let ytCookiesArgs = [];
+let ytExtraArgs = [];
 if (process.env.YT_COOKIES_B64) {
   fs.writeFileSync(COOKIES_PATH, Buffer.from(process.env.YT_COOKIES_B64, 'base64'));
   ytCookiesArgs = ['--cookies', COOKIES_PATH];
+  ytExtraArgs = ['--cookies', COOKIES_PATH, '--extractor-args', 'youtube:player_client=ios,default'];
   console.log('  🍪 YouTube cookies loaded');
 }
 
@@ -75,7 +77,7 @@ app.get('/api/debug-ytdlp', (req, res) => {
   proc.stdout.on('data', d => { out += d; });
   proc.on('close', () => {
     const version = out.trim();
-    const fmtArgs = ['--list-formats', '--no-warnings', ...ytCookiesArgs, `https://www.youtube.com/watch?v=${vid}`];
+    const fmtArgs = ['--list-formats', '--no-warnings', ...ytExtraArgs, `https://www.youtube.com/watch?v=${vid}`];
     const proc2 = spawn('yt-dlp', fmtArgs);
     let out2 = '', err2 = '';
     proc2.stdout.on('data', d => { out2 += d; });
@@ -99,7 +101,7 @@ app.get('/api/search', (req, res) => {
     '--flat-playlist',
     '--no-download',
     '--no-warnings',
-    ...ytCookiesArgs,
+    ...ytExtraArgs,
   ]);
 
   let output = '';
@@ -172,7 +174,7 @@ app.post('/api/download', (req, res) => {
     '--no-warnings',
     '--no-simulate',
     '--no-check-certificates',
-    ...ytCookiesArgs,
+    ...ytExtraArgs,
     url
   ]);
 
@@ -387,7 +389,7 @@ app.post('/api/fetch-thumbnail', async (req, res) => {
     '--flat-playlist',
     '--no-download',
     '--no-warnings',
-    ...ytCookiesArgs,
+    ...ytExtraArgs,
   ]);
 
   let output = '';
@@ -500,7 +502,7 @@ function fetchThumbFromYT(title, cb) {
     '--flat-playlist',
     '--no-download',
     '--no-warnings',
-    ...ytCookiesArgs,
+    ...ytExtraArgs,
   ]);
 
   let output = '';
