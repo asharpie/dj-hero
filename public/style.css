@@ -157,6 +157,7 @@ button {
 
 /* Search results */
 .search-results { display: flex; flex-direction: column; gap: 6px; }
+.search-heading { color: var(--accent); font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 4px 2px; }
 .search-result-item {
   display: flex;
   align-items: center;

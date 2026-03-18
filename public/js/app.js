@@ -80,7 +80,7 @@
   function renderSongList() {
     var container = $('#songs-list');
     if (songs.length === 0) {
-      container.innerHTML = '<p class=\"empty-msg\">Search above and hit \\u25B6 Play to start!</p>';
+      container.innerHTML = '<p class="empty-msg">Your library is empty. Search for a song above and hit \u25B6 Play, or download songs to build your library!</p>';
       return;
     }
 
@@ -117,6 +117,51 @@
   function updatePlayButton() {
     var btn = $('#btn-go-setup');
     btn.disabled = songs.length < 1;
+  }
+
+  // ─── Popular Songs (auto-loaded on start) ───────
+
+  var POPULAR_QUERIES = [
+    'top hits 2026', 'popular songs right now', 'trending music',
+    'best edm drops', 'hip hop bangers', 'pop hits playlist',
+  ];
+
+  async function loadPopularSongs() {
+    var query = POPULAR_QUERIES[Math.floor(Math.random() * POPULAR_QUERIES.length)];
+    try {
+      var res = await fetch('/api/search?q=' + encodeURIComponent(query));
+      if (!res.ok) return;
+      var results = await res.json();
+      if (results.length === 0) return;
+
+      var container = $('#search-results');
+      var searchResults = results;
+
+      container.innerHTML = '<p class="search-heading">Popular right now</p>' + results.map(function (r, i) {
+        var thumbUrl = r.thumbnail ? escapeHtml(r.thumbnail) : '';
+        var thumbImg = thumbUrl
+          ? '<img src="' + thumbUrl + '" alt="" loading="lazy">'
+          : '<img src="" alt="" style="background:#333">';
+        return '<div class="search-result-item" data-idx="' + i + '">' +
+          thumbImg +
+          '<div class="search-result-info">' +
+            '<div class="search-result-title">' + escapeHtml(r.title) + '</div>' +
+            '<div class="search-result-meta">' + escapeHtml(r.channel) + ' \u00B7 ' + (r.durationStr || '?:??') + '</div>' +
+          '</div>' +
+          '<button class="btn-play-stream" data-idx="' + i + '">\u25B6 Play</button>' +
+        '</div>';
+      }).join('');
+
+      container.querySelectorAll('.btn-play-stream').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          var r = searchResults[parseInt(btn.dataset.idx)];
+          streamAndPlay(r.id, r.title, r.thumbnail, r.duration);
+        });
+      });
+    } catch (e) {
+      // Silently fail — user can still search manually
+    }
   }
 
   // ─── YouTube Search ──────────────────────────────
@@ -161,7 +206,7 @@
         });
       });
     } catch (e) {
-      container.innerHTML = '<p class="empty-msg">Search failed \u2014 is yt-dlp installed?</p>';
+      container.innerHTML = '<p class="empty-msg">Search failed \u2014 please try again</p>';
     }
   }
 
@@ -643,6 +688,9 @@
 
     // Load songs on start
     loadSongs();
+
+    // Auto-populate search with popular songs
+    loadPopularSongs();
   }
 
   // ─── Utility ─────────────────────────────────────
