@@ -79,7 +79,6 @@ app.get('/api/search', (req, res) => {
     '--flat-playlist',
     '--no-download',
     '--no-warnings',
-    '--extractor-args', 'youtube:player_client=web_creator',
     ...ytCookiesArgs,
   ]);
 
@@ -154,7 +153,6 @@ app.post('/api/download', (req, res) => {
     '--no-warnings',
     '--no-simulate',
     '--no-check-certificates',
-    '--extractor-args', 'youtube:player_client=web_creator',
     ...ytCookiesArgs,
     url
   ]);
@@ -370,7 +368,6 @@ app.post('/api/fetch-thumbnail', async (req, res) => {
     '--flat-playlist',
     '--no-download',
     '--no-warnings',
-    '--extractor-args', 'youtube:player_client=web_creator',
     ...ytCookiesArgs,
   ]);
 
@@ -484,7 +481,6 @@ function fetchThumbFromYT(title, cb) {
     '--flat-playlist',
     '--no-download',
     '--no-warnings',
-    '--extractor-args', 'youtube:player_client=web_creator',
     ...ytCookiesArgs,
   ]);
 
