@@ -69,7 +69,8 @@ app.get('/api/search', (req, res) => {
     '--dump-json',
     '--flat-playlist',
     '--no-download',
-    '--no-warnings'
+    '--no-warnings',
+    '--extractor-args', 'youtube:player_client=web_creator',
   ]);
 
   let output = '';
@@ -143,7 +144,7 @@ app.post('/api/download', (req, res) => {
     '--no-warnings',
     '--no-simulate',
     '--no-check-certificates',
-    '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    '--extractor-args', 'youtube:player_client=web_creator',
     url
   ]);
 
@@ -357,7 +358,8 @@ app.post('/api/fetch-thumbnail', async (req, res) => {
     '--dump-json',
     '--flat-playlist',
     '--no-download',
-    '--no-warnings'
+    '--no-warnings',
+    '--extractor-args', 'youtube:player_client=web_creator',
   ]);
 
   let output = '';
@@ -469,7 +471,8 @@ function fetchThumbFromYT(title, cb) {
     '--dump-json',
     '--flat-playlist',
     '--no-download',
-    '--no-warnings'
+    '--no-warnings',
+    '--extractor-args', 'youtube:player_client=web_creator',
   ]);
 
   let output = '';
