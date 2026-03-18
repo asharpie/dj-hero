@@ -1,0 +1,12 @@
+node_modules
+songs
+data
+.env
+.env.*
+!.env.example
+*.mp3
+*.wav
+*.ogg
+*.jpg
+*.jpeg
+*.png

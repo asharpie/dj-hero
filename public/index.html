@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DJ Hero</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- ═══════════════════════ LIBRARY SCREEN ═══════════════════════ -->
+  <div id="screen-library" class="screen active">
+    <header class="top-bar">
+      <h1 class="logo">DJ <span class="accent">HERO</span></h1>
+      <button id="btn-go-leaderboard" class="btn-secondary btn-sm">🏆 Leaderboard</button>
+    </header>
+
+    <div class="library-content">
+      <div class="search-section">
+        <h2>Search YouTube</h2>
+        <div class="search-bar">
+          <input type="text" id="search-input" placeholder="Search for a song..." autocomplete="off">
+          <button id="search-btn">Search</button>
+        </div>
+        <div id="search-results" class="search-results"></div>
+      </div>
+
+      <div class="songs-section">
+        <h2>Your Library</h2>
+        <div id="songs-list" class="songs-list">
+          <p class="empty-msg">No songs yet — search and download to get started!</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="bottom-bar">
+      <button id="btn-go-setup" class="btn-primary" disabled>Select Songs &amp; Play ▶</button>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ SETUP SCREEN ═══════════════════════ -->
+  <div id="screen-setup" class="screen">
+    <header class="top-bar">
+      <button class="btn-back" id="btn-back-library">← Library</button>
+      <h1 class="logo">SET <span class="accent">UP</span></h1>
+    </header>
+
+    <div class="setup-content">
+      <div class="song-select-cards">
+        <h2>Select Song</h2>
+        <div id="song-card-list" class="song-card-list"></div>
+      </div>
+
+      <div class="difficulty-select">
+        <h2>Difficulty</h2>
+        <div class="diff-buttons">
+          <button class="diff-btn" data-diff="easy">Easy</button>
+          <button class="diff-btn active" data-diff="medium">Medium</button>
+          <button class="diff-btn" data-diff="hard">Hard</button>
+          <button class="diff-btn" data-diff="master">Master</button>
+        </div>
+      </div>
+
+      <div class="controls-reference">
+        <h3>Controls</h3>
+        <div class="controls-grid">
+          <div class="ctrl-col">
+            <span><kbd>D</kbd> <span class="ctrl-color" style="color:#00e5ff">■</span></span>
+            <span><kbd>F</kbd> <span class="ctrl-color" style="color:#ff00ff">■</span></span>
+            <span><kbd>J</kbd> <span class="ctrl-color" style="color:#ffea00">■</span></span>
+            <span><kbd>K</kbd> <span class="ctrl-color" style="color:#00ff88">■</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="bottom-bar">
+      <button id="btn-start-game" class="btn-primary btn-glow">Start Mix ▶</button>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ GAME SCREEN ═══════════════════════ -->
+  <div id="screen-game" class="screen">
+    <canvas id="game-canvas"></canvas>
+    <div id="game-hud">
+      <div class="hud-left">
+        <div class="hud-score">Score: <span id="hud-score-val">0</span></div>
+        <div class="hud-combo">Combo: <span id="hud-combo-val">0</span></div>
+      </div>
+      <div class="hud-center">
+        <div class="crowd-meter-container">
+          <div class="crowd-meter-label">CROWD</div>
+          <div class="crowd-meter-bar">
+            <div class="crowd-meter-fill" id="crowd-meter-fill"></div>
+          </div>
+        </div>
+      </div>
+      <div class="hud-right">
+        <div class="hud-multi">Multiplier: <span id="hud-multi-val">1x</span></div>
+      </div>
+    </div>
+    <div id="game-overlay" class="game-overlay hidden">
+      <div class="overlay-content">
+        <div id="countdown-text" class="countdown-text"></div>
+        <div id="loading-text" class="loading-text hidden">
+          <div class="spinner"></div>
+          <p>Analyzing tracks...</p>
+        </div>
+        <div id="pause-menu" class="pause-menu hidden">
+          <h2>Paused</h2>
+          <button id="btn-resume" class="btn-primary">Resume</button>
+          <button id="btn-quit" class="btn-secondary">Quit to Library</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ RESULTS SCREEN ═══════════════════════ -->
+  <div id="screen-results" class="screen">
+    <div class="results-content">
+      <h1 class="results-title">Mix <span class="accent">Complete</span></h1>
+      <div class="results-grade" id="results-grade">A</div>
+      <div class="results-score">Score: <span id="results-score">0</span></div>
+      <div id="results-comparison" class="results-comparison"></div>
+      <div class="results-stats">
+        <div class="stat"><span class="stat-label">Perfect</span><span class="stat-value" id="stat-perfect">0</span></div>
+        <div class="stat"><span class="stat-label">Great</span><span class="stat-value" id="stat-great">0</span></div>
+        <div class="stat"><span class="stat-label">Good</span><span class="stat-value" id="stat-good">0</span></div>
+        <div class="stat"><span class="stat-label">Miss</span><span class="stat-value" id="stat-miss">0</span></div>
+        <div class="stat"><span class="stat-label">Max Combo</span><span class="stat-value" id="stat-combo">0</span></div>
+        <div class="stat"><span class="stat-label">Accuracy</span><span class="stat-value" id="stat-accuracy">0%</span></div>
+      </div>
+      <div class="results-buttons">
+        <button id="btn-retry" class="btn-primary btn-glow">Replay ▶</button>
+        <button id="btn-back-menu" class="btn-secondary">Back to Menu</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ LEADERBOARD SCREEN ═══════════════════════ -->
+  <div id="screen-leaderboard" class="screen">
+    <header class="top-bar">
+      <button class="btn-back" id="btn-back-from-lb">← Menu</button>
+      <h1 class="logo">LEADER<span class="accent">BOARD</span></h1>
+    </header>
+
+    <div class="leaderboard-content">
+      <div class="lb-search-bar">
+        <input type="text" id="lb-search-input" placeholder="Search songs..." autocomplete="off">
+      </div>
+      <div id="lb-song-list" class="lb-song-list"></div>
+      <div id="lb-detail" class="lb-detail hidden">
+        <button class="btn-back lb-back-btn" id="lb-back-to-list">← All Songs</button>
+        <h2 id="lb-detail-title" class="lb-detail-title"></h2>
+        <div id="lb-detail-meta" class="lb-detail-meta"></div>
+        <button id="lb-play-song" class="btn-primary" style="margin:8px 0;display:none;">▶ Play This Song</button>
+        <div id="lb-detail-scores" class="lb-detail-scores"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast-container"></div>
+
+  <script src="js/audio.js"></script>
+  <script src="js/analyzer.js"></script>
+  <script src="js/game.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
