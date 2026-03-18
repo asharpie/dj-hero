@@ -183,7 +183,17 @@ app.post('/api/download', (req, res) => {
 
   proc.on('close', async (code) => {
     if (code !== 0) {
-      downloads.set(downloadId, { status: 'error', title: safeName, error: stderr });
+      // yt-dlp failed — try cobalt API as fallback
+      console.log(`  ⚠️  yt-dlp failed for "${safeName}", trying cobalt fallback...`);
+      try {
+        await cobaltDownload(url, safeName, destDir, downloadId);
+      } catch (e) {
+        downloads.set(downloadId, { status: 'error', title: safeName, error: e.message });
+        // Clean up temp dir if cloud mode
+        if (USE_CLOUD) {
+          try { fs.readdirSync(destDir).forEach(f => fs.unlinkSync(path.join(destDir, f))); fs.rmdirSync(destDir); } catch (_) {}
+        }
+      }
       return;
     }
 
@@ -205,6 +215,89 @@ app.post('/api/download', (req, res) => {
 
   res.json({ downloadId, title: safeName });
 });
+
+// ─── Cobalt API fallback (when yt-dlp can't download from datacenter IP) ───
+const COBALT_API = process.env.COBALT_API || 'https://api.cobalt.tools';
+
+async function cobaltDownload(youtubeUrl, safeName, destDir, downloadId) {
+  downloads.set(downloadId, { status: 'downloading', title: safeName, startedAt: Date.now() });
+
+  // Step 1: Ask cobalt for a download URL
+  const cobaltRes = await fetch(COBALT_API, {
+    method: 'POST',
+    headers: {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      url: youtubeUrl,
+      downloadMode: 'audio',
+      audioFormat: 'mp3',
+    }),
+  });
+
+  if (!cobaltRes.ok) {
+    const text = await cobaltRes.text().catch(() => '');
+    throw new Error(`Cobalt API error ${cobaltRes.status}: ${text.substring(0, 200)}`);
+  }
+
+  const cobaltData = await cobaltRes.json();
+
+  if (!cobaltData.url) {
+    throw new Error(`Cobalt returned no URL: ${cobaltData.status || 'unknown'}`);
+  }
+
+  console.log(`  🔗 Cobalt returned ${cobaltData.status} URL for "${safeName}"`);
+
+  // Step 2: Download the audio from cobalt's URL
+  const audioRes = await fetch(cobaltData.url);
+  if (!audioRes.ok) throw new Error(`Failed to fetch audio from cobalt: ${audioRes.status}`);
+
+  const arrayBuffer = await audioRes.arrayBuffer();
+  const mp3Buffer = Buffer.from(arrayBuffer);
+
+  if (mp3Buffer.length < 10000) {
+    throw new Error('Downloaded file too small — likely not valid audio');
+  }
+
+  console.log(`  📥 Cobalt downloaded ${(mp3Buffer.length / 1048576).toFixed(1)} MB for "${safeName}"`);
+
+  // Step 3: Store in R2 (cloud) or filesystem (local)
+  const filename = `${safeName}.mp3`;
+
+  if (USE_CLOUD) {
+    const { PutObjectCommand } = require('@aws-sdk/client-s3');
+    await s3Client.send(new PutObjectCommand({
+      Bucket: R2_BUCKET,
+      Key: `songs/${filename}`,
+      Body: mp3Buffer,
+      ContentType: 'audio/mpeg',
+    }));
+
+    // Try to get thumbnail from YouTube search result data
+    const songDoc = {
+      filename,
+      title: safeName,
+      size: mp3Buffer.length,
+      url: `/api/stream/songs/${encodeURIComponent(filename)}`,
+      thumbnail: null,
+      createdAt: new Date(),
+    };
+    await mongoDb.collection('songs').updateOne(
+      { filename },
+      { $set: songDoc },
+      { upsert: true }
+    );
+
+    // Clean up temp dir
+    try { fs.readdirSync(destDir).forEach(f => fs.unlinkSync(path.join(destDir, f))); fs.rmdirSync(destDir); } catch (_) {}
+  } else {
+    fs.writeFileSync(path.join(SONGS_DIR, filename), mp3Buffer);
+  }
+
+  downloads.set(downloadId, { status: 'complete', title: safeName });
+  console.log(`  ✅ Cobalt download complete: "${safeName}"`);
+}
 
 // Upload downloaded files to R2 + save metadata to MongoDB
 async function uploadToCloud(dir, safeName) {
