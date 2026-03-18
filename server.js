@@ -146,8 +146,8 @@ app.get('/api/search', (req, res) => {
 });
 
 // Download a song from YouTube
-app.post('/api/download', (req, res) => {
-  const { url, title } = req.body;
+app.post('/api/download', async (req, res) => {
+  const { url, title, thumbnail } = req.body;
   if (!url || typeof url !== 'string') {
     return res.status(400).json({ error: 'URL required' });
   }
@@ -157,116 +157,87 @@ app.post('/api/download', (req, res) => {
     .trim()
     .substring(0, 100) || 'download';
 
-  // Download to either songs/ (local) or /tmp (cloud)
-  const destDir = USE_CLOUD ? fs.mkdtempSync(path.join(os.tmpdir(), 'djhero-')) : SONGS_DIR;
-  const outputPath = path.join(destDir, `${safeName}.%(ext)s`);
   const downloadId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
-  downloads.set(downloadId, { status: 'downloading', title: safeName, startedAt: Date.now() });
-
-  const proc = spawn('yt-dlp', [
-    '-x',
-    '--audio-format', 'mp3',
-    '--write-thumbnail',
-    '--convert-thumbnails', 'jpg',
-    '-o', outputPath,
-    '--no-playlist',
-    '--no-warnings',
-    '--no-simulate',
-    '--no-check-certificates',
-    ...ytExtraArgs,
-    url
-  ]);
-
-  let stderr = '';
-  proc.stderr.on('data', (data) => { stderr += data.toString(); });
-
-  proc.on('close', async (code) => {
-    if (code !== 0) {
-      // yt-dlp failed — try cobalt API as fallback
-      console.log(`  ⚠️  yt-dlp failed for "${safeName}", trying cobalt fallback...`);
-      try {
-        await cobaltDownload(url, safeName, destDir, downloadId);
-      } catch (e) {
-        downloads.set(downloadId, { status: 'error', title: safeName, error: e.message });
-        // Clean up temp dir if cloud mode
-        if (USE_CLOUD) {
-          try { fs.readdirSync(destDir).forEach(f => fs.unlinkSync(path.join(destDir, f))); fs.rmdirSync(destDir); } catch (_) {}
-        }
-      }
-      return;
-    }
-
-    if (USE_CLOUD) {
-      try {
-        await uploadToCloud(destDir, safeName);
+  if (USE_CLOUD) {
+    // Cloud mode: queue for local worker to pick up
+    const job = {
+      downloadId,
+      url,
+      title: safeName,
+      thumbnail: thumbnail || null,
+      status: 'pending',
+      createdAt: new Date(),
+    };
+    await mongoDb.collection('download_queue').insertOne(job);
+    downloads.set(downloadId, { status: 'pending', title: safeName });
+    console.log(`  📋 Queued download: "${safeName}" (${downloadId})`);
+  } else {
+    // Local mode: download directly with yt-dlp
+    downloads.set(downloadId, { status: 'downloading', title: safeName, startedAt: Date.now() });
+    const outputPath = path.join(SONGS_DIR, `${safeName}.%(ext)s`);
+    const proc = spawn('yt-dlp', [
+      '-x', '--audio-format', 'mp3',
+      '--write-thumbnail', '--convert-thumbnails', 'jpg',
+      '-o', outputPath,
+      '--no-playlist', '--no-warnings', '--no-simulate', '--no-check-certificates',
+      ...ytExtraArgs, url
+    ]);
+    let stderr = '';
+    proc.stderr.on('data', (data) => { stderr += data.toString(); });
+    proc.on('close', (code) => {
+      if (code !== 0) {
+        downloads.set(downloadId, { status: 'error', title: safeName, error: stderr });
+      } else {
         downloads.set(downloadId, { status: 'complete', title: safeName });
-      } catch (e) {
-        downloads.set(downloadId, { status: 'error', title: safeName, error: e.message });
-      } finally {
-        // Clean up temp files
-        fs.readdirSync(destDir).forEach(f => fs.unlinkSync(path.join(destDir, f)));
-        fs.rmdirSync(destDir);
       }
-    } else {
-      downloads.set(downloadId, { status: 'complete', title: safeName });
-    }
-  });
+    });
+  }
 
   res.json({ downloadId, title: safeName });
 });
 
-// ─── Cobalt API fallback (when yt-dlp can't download from datacenter IP) ───
-const COBALT_API = process.env.COBALT_API || 'https://api.cobalt.tools';
+// ─── Worker endpoints (for local machine to process download queue) ───
+const WORKER_SECRET = process.env.WORKER_SECRET || 'djhero-worker-default';
 
-async function cobaltDownload(youtubeUrl, safeName, destDir, downloadId) {
-  downloads.set(downloadId, { status: 'downloading', title: safeName, startedAt: Date.now() });
-
-  // Step 1: Ask cobalt for a download URL
-  const cobaltRes = await fetch(COBALT_API, {
-    method: 'POST',
-    headers: {
-      'Accept': 'application/json',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      url: youtubeUrl,
-      downloadMode: 'audio',
-      audioFormat: 'mp3',
-    }),
-  });
-
-  if (!cobaltRes.ok) {
-    const text = await cobaltRes.text().catch(() => '');
-    throw new Error(`Cobalt API error ${cobaltRes.status}: ${text.substring(0, 200)}`);
+function checkWorkerAuth(req, res) {
+  const auth = req.headers.authorization;
+  if (auth !== `Bearer ${WORKER_SECRET}`) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return false;
   }
+  return true;
+}
 
-  const cobaltData = await cobaltRes.json();
+// Worker: get next pending download job
+app.get('/api/worker/pending', async (req, res) => {
+  if (!checkWorkerAuth(req, res)) return;
+  if (!USE_CLOUD) return res.json({ job: null });
 
-  if (!cobaltData.url) {
-    throw new Error(`Cobalt returned no URL: ${cobaltData.status || 'unknown'}`);
-  }
+  const job = await mongoDb.collection('download_queue').findOneAndUpdate(
+    { status: 'pending' },
+    { $set: { status: 'downloading', claimedAt: new Date() } },
+    { sort: { createdAt: 1 }, returnDocument: 'after' }
+  );
+  res.json({ job: job || null });
+});
 
-  console.log(`  🔗 Cobalt returned ${cobaltData.status} URL for "${safeName}"`);
+// Worker: submit completed download
+app.post('/api/worker/complete', upload.single('audio'), async (req, res) => {
+  if (!checkWorkerAuth(req, res)) return;
+  if (!USE_CLOUD || !req.file) return res.status(400).json({ error: 'Missing file' });
 
-  // Step 2: Download the audio from cobalt's URL
-  const audioRes = await fetch(cobaltData.url);
-  if (!audioRes.ok) throw new Error(`Failed to fetch audio from cobalt: ${audioRes.status}`);
+  const { downloadId, title } = req.body;
+  if (!downloadId) return res.status(400).json({ error: 'Missing downloadId' });
 
-  const arrayBuffer = await audioRes.arrayBuffer();
-  const mp3Buffer = Buffer.from(arrayBuffer);
-
-  if (mp3Buffer.length < 10000) {
-    throw new Error('Downloaded file too small — likely not valid audio');
-  }
-
-  console.log(`  📥 Cobalt downloaded ${(mp3Buffer.length / 1048576).toFixed(1)} MB for "${safeName}"`);
-
-  // Step 3: Store in R2 (cloud) or filesystem (local)
+  const safeName = (title || 'upload').replace(/[^a-zA-Z0-9\s\-_().&]/g, '').trim().substring(0, 100);
   const filename = `${safeName}.mp3`;
 
-  if (USE_CLOUD) {
+  try {
     const { PutObjectCommand } = require('@aws-sdk/client-s3');
+    const mp3Buffer = fs.readFileSync(req.file.path);
+
+    // Upload MP3 to R2
     await s3Client.send(new PutObjectCommand({
       Bucket: R2_BUCKET,
       Key: `songs/${filename}`,
@@ -274,13 +245,27 @@ async function cobaltDownload(youtubeUrl, safeName, destDir, downloadId) {
       ContentType: 'audio/mpeg',
     }));
 
-    // Try to get thumbnail from YouTube search result data
+    // Upload thumbnail if provided
+    let thumbnailPath = null;
+    if (req.body.thumbnailData) {
+      const thumbBuffer = Buffer.from(req.body.thumbnailData, 'base64');
+      const thumbKey = `thumbnails/${safeName}.jpg`;
+      await s3Client.send(new PutObjectCommand({
+        Bucket: R2_BUCKET,
+        Key: thumbKey,
+        Body: thumbBuffer,
+        ContentType: 'image/jpeg',
+      }));
+      thumbnailPath = `/api/stream/${thumbKey}`;
+    }
+
+    // Save to MongoDB
     const songDoc = {
       filename,
       title: safeName,
       size: mp3Buffer.length,
       url: `/api/stream/songs/${encodeURIComponent(filename)}`,
-      thumbnail: null,
+      thumbnail: thumbnailPath,
       createdAt: new Date(),
     };
     await mongoDb.collection('songs').updateOne(
@@ -289,15 +274,40 @@ async function cobaltDownload(youtubeUrl, safeName, destDir, downloadId) {
       { upsert: true }
     );
 
-    // Clean up temp dir
-    try { fs.readdirSync(destDir).forEach(f => fs.unlinkSync(path.join(destDir, f))); fs.rmdirSync(destDir); } catch (_) {}
-  } else {
-    fs.writeFileSync(path.join(SONGS_DIR, filename), mp3Buffer);
-  }
+    // Update queue + in-memory status
+    await mongoDb.collection('download_queue').updateOne(
+      { downloadId },
+      { $set: { status: 'complete', completedAt: new Date() } }
+    );
+    downloads.set(downloadId, { status: 'complete', title: safeName });
 
-  downloads.set(downloadId, { status: 'complete', title: safeName });
-  console.log(`  ✅ Cobalt download complete: "${safeName}"`);
-}
+    fs.unlinkSync(req.file.path);
+    console.log(`  ✅ Worker completed: "${safeName}" (${(mp3Buffer.length / 1048576).toFixed(1)} MB)`);
+    res.json({ success: true });
+  } catch (e) {
+    try { fs.unlinkSync(req.file.path); } catch (_) {}
+    // Mark as error so it can be retried
+    await mongoDb.collection('download_queue').updateOne(
+      { downloadId },
+      { $set: { status: 'pending', error: e.message } }
+    ).catch(() => {});
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Worker: report error on a job
+app.post('/api/worker/error', async (req, res) => {
+  if (!checkWorkerAuth(req, res)) return;
+  const { downloadId, error } = req.body;
+  if (downloadId) {
+    await mongoDb.collection('download_queue').updateOne(
+      { downloadId },
+      { $set: { status: 'error', error: error || 'Unknown error' } }
+    ).catch(() => {});
+    downloads.set(downloadId, { status: 'error', title: '', error: error || 'Download failed' });
+  }
+  res.json({ ok: true });
+});
 
 // Upload downloaded files to R2 + save metadata to MongoDB
 async function uploadToCloud(dir, safeName) {
@@ -365,10 +375,18 @@ app.get('/api/stream/*', async (req, res) => {
 });
 
 // Check download status
-app.get('/api/download/:id', (req, res) => {
-  const download = downloads.get(req.params.id);
-  if (!download) return res.status(404).json({ error: 'Download not found' });
-  res.json(download);
+app.get('/api/download/:id', async (req, res) => {
+  // Check in-memory first (fast path)
+  const memDownload = downloads.get(req.params.id);
+  if (memDownload) return res.json(memDownload);
+
+  // Check MongoDB queue (cloud mode)
+  if (USE_CLOUD) {
+    const job = await mongoDb.collection('download_queue').findOne({ downloadId: req.params.id });
+    if (job) return res.json({ status: job.status, title: job.title, error: job.error || undefined });
+  }
+
+  res.status(404).json({ error: 'Download not found' });
 });
 
 // Upload MP3 file directly (for when yt-dlp can't run on server)
