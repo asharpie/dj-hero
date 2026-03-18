@@ -210,8 +210,8 @@ async function uploadToCloud(dir, safeName) {
     filename: mp3File,
     title: path.parse(mp3File).name,
     size: mp3Buffer.length,
-    url: `${R2_PUBLIC_URL}/songs/${encodeURIComponent(mp3File)}`,
-    thumbnail: thumbnailUrl,
+    url: `/api/stream/songs/${encodeURIComponent(mp3File)}`,
+    thumbnail: thumbnailUrl ? thumbnailUrl.replace(R2_PUBLIC_URL + '/', '/api/stream/') : null,
     createdAt: new Date(),
   };
   await mongoDb.collection('songs').updateOne(
@@ -220,6 +220,23 @@ async function uploadToCloud(dir, safeName) {
     { upsert: true }
   );
 }
+
+// ─── Stream files from R2 via proxy (avoids CORS / public-access issues) ───
+app.get('/api/stream/*', async (req, res) => {
+  if (!USE_CLOUD) return res.status(404).end();
+  const key = req.params[0];
+  if (!key || key.includes('..')) return res.status(400).end();
+  try {
+    const { GetObjectCommand } = require('@aws-sdk/client-s3');
+    const result = await s3Client.send(new GetObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+    if (result.ContentType) res.set('Content-Type', result.ContentType);
+    if (result.ContentLength) res.set('Content-Length', String(result.ContentLength));
+    res.set('Cache-Control', 'public, max-age=86400');
+    result.Body.pipe(res);
+  } catch (e) {
+    res.status(404).end();
+  }
+});
 
 // Check download status
 app.get('/api/download/:id', (req, res) => {
@@ -237,8 +254,12 @@ app.get('/api/songs', async (req, res) => {
         filename: s.filename,
         title: s.title,
         size: s.size,
-        url: s.url,
-        thumbnail: s.thumbnail,
+        url: s.url && R2_PUBLIC_URL && s.url.startsWith(R2_PUBLIC_URL)
+          ? s.url.replace(R2_PUBLIC_URL + '/', '/api/stream/')
+          : s.url,
+        thumbnail: s.thumbnail && R2_PUBLIC_URL && s.thumbnail.startsWith(R2_PUBLIC_URL)
+          ? s.thumbnail.replace(R2_PUBLIC_URL + '/', '/api/stream/')
+          : s.thumbnail,
       })));
     } catch (e) {
       res.json([]);
@@ -311,7 +332,7 @@ app.post('/api/fetch-thumbnail', async (req, res) => {
           { title: safeName },
           { $set: { thumbnail: publicThumbUrl } }
         );
-        res.json({ thumbnail: publicThumbUrl });
+        res.json({ thumbnail: `/api/stream/${thumbKey}` });
       } catch (e) {
         res.json({ thumbnail: null });
       }
