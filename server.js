@@ -21,7 +21,7 @@ if (process.env.YT_COOKIES_B64) {
 }
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 
 // CORS: allow Vercel frontend in production, permissive in dev
 const FRONTEND_URL = process.env.FRONTEND_URL || '*';
@@ -276,6 +276,54 @@ app.get('/api/download/:id', (req, res) => {
   const download = downloads.get(req.params.id);
   if (!download) return res.status(404).json({ error: 'Download not found' });
   res.json(download);
+});
+
+// Upload MP3 file directly (for when yt-dlp can't run on server)
+const multer = require('multer');
+const upload = multer({ dest: os.tmpdir(), limits: { fileSize: 50 * 1024 * 1024 } });
+app.post('/api/upload', upload.single('audio'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  const title = (req.body.title || 'Unknown').replace(/[^a-zA-Z0-9\s\-_().&]/g, '').trim().substring(0, 100) || 'upload';
+  const filename = `${title}.mp3`;
+
+  if (USE_CLOUD) {
+    try {
+      const { PutObjectCommand } = require('@aws-sdk/client-s3');
+      const mp3Buffer = fs.readFileSync(req.file.path);
+
+      await s3Client.send(new PutObjectCommand({
+        Bucket: R2_BUCKET,
+        Key: `songs/${filename}`,
+        Body: mp3Buffer,
+        ContentType: 'audio/mpeg',
+      }));
+
+      const songDoc = {
+        filename,
+        title,
+        size: mp3Buffer.length,
+        url: `/api/stream/songs/${encodeURIComponent(filename)}`,
+        thumbnail: null,
+        createdAt: new Date(),
+      };
+      await mongoDb.collection('songs').updateOne(
+        { filename },
+        { $set: songDoc },
+        { upsert: true }
+      );
+
+      fs.unlinkSync(req.file.path);
+      res.json({ success: true, title });
+    } catch (e) {
+      try { fs.unlinkSync(req.file.path); } catch (_) {}
+      res.status(500).json({ error: e.message });
+    }
+  } else {
+    // Local mode: move file to songs dir
+    const dest = path.join(SONGS_DIR, filename);
+    fs.renameSync(req.file.path, dest);
+    res.json({ success: true, title });
+  }
 });
 
 // List all songs

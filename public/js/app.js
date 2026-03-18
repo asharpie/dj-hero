@@ -184,9 +184,10 @@
             toast('Downloaded: ' + title, 'success');
             loadSongs();
           } else if (status.status === 'error') {
-            btn.textContent = 'Error';
+            // Server-side download failed — offer file upload
+            btn.textContent = 'Upload';
             btn.disabled = false;
-            toast('Download failed: ' + (status.error || 'unknown error').substring(0, 200), 'error');
+            toast('Server can\'t download — use the Upload button in the library', 'error');
           } else {
             btn.textContent = '\u2193\u2193\u2193';
             setTimeout(checkStatus, 2000);
@@ -202,6 +203,27 @@
       btn.textContent = 'Error';
       btn.disabled = false;
       toast('Download failed', 'error');
+    }
+  }
+
+  // Upload a local MP3 file
+  async function uploadLocalFile(file) {
+    var title = file.name.replace(/\.[^.]+$/, '');
+    toast('Uploading: ' + title + '...', 'success');
+    var formData = new FormData();
+    formData.append('audio', file);
+    formData.append('title', title);
+    try {
+      var res = await fetch('/api/upload', { method: 'POST', body: formData });
+      var data = await res.json();
+      if (data.success) {
+        toast('Uploaded: ' + title, 'success');
+        loadSongs();
+      } else {
+        toast('Upload failed: ' + (data.error || 'unknown'), 'error');
+      }
+    } catch (e) {
+      toast('Upload failed', 'error');
     }
   }
 
@@ -584,6 +606,15 @@
       if (e.key === 'Enter') {
         var query = e.target.value.trim();
         if (query) searchYouTube(query);
+      }
+    });
+
+    // Library: upload MP3
+    $('#upload-mp3').addEventListener('change', function () {
+      var file = this.files[0];
+      if (file) {
+        uploadLocalFile(file);
+        this.value = '';
       }
     });
 
