@@ -9,6 +9,15 @@ const os = require('os');
 // ─── Cloud mode detection ──────────────────────────
 const USE_CLOUD = !!(process.env.MONGODB_URI && process.env.R2_ENDPOINT);
 
+// ─── YouTube cookies (base64-encoded in env var) ───
+const COOKIES_PATH = path.join(os.tmpdir(), 'yt-cookies.txt');
+let ytCookiesArgs = [];
+if (process.env.YT_COOKIES_B64) {
+  fs.writeFileSync(COOKIES_PATH, Buffer.from(process.env.YT_COOKIES_B64, 'base64'));
+  ytCookiesArgs = ['--cookies', COOKIES_PATH];
+  console.log('  🍪 YouTube cookies loaded');
+}
+
 const app = express();
 app.use(express.json());
 
@@ -71,6 +80,7 @@ app.get('/api/search', (req, res) => {
     '--no-download',
     '--no-warnings',
     '--extractor-args', 'youtube:player_client=web_creator',
+    ...ytCookiesArgs,
   ]);
 
   let output = '';
@@ -145,6 +155,7 @@ app.post('/api/download', (req, res) => {
     '--no-simulate',
     '--no-check-certificates',
     '--extractor-args', 'youtube:player_client=web_creator',
+    ...ytCookiesArgs,
     url
   ]);
 
@@ -360,6 +371,7 @@ app.post('/api/fetch-thumbnail', async (req, res) => {
     '--no-download',
     '--no-warnings',
     '--extractor-args', 'youtube:player_client=web_creator',
+    ...ytCookiesArgs,
   ]);
 
   let output = '';
@@ -473,6 +485,7 @@ function fetchThumbFromYT(title, cb) {
     '--no-download',
     '--no-warnings',
     '--extractor-args', 'youtube:player_client=web_creator',
+    ...ytCookiesArgs,
   ]);
 
   let output = '';
