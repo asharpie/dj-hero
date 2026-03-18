@@ -186,7 +186,7 @@
           } else if (status.status === 'error') {
             btn.textContent = 'Error';
             btn.disabled = false;
-            toast('Download failed', 'error');
+            toast('Download failed: ' + (status.error || 'unknown error').substring(0, 200), 'error');
           } else {
             btn.textContent = '\u2193\u2193\u2193';
             setTimeout(checkStatus, 2000);

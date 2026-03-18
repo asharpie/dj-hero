@@ -3,3 +3,4 @@ songs/
 data/
 .env
 .env.local
+.vercel
