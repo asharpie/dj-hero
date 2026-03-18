@@ -66,6 +66,26 @@ async function initCloud() {
 
 const downloads = new Map();
 
+// Debug endpoint: check yt-dlp version and formats
+app.get('/api/debug-ytdlp', (req, res) => {
+  const vid = req.query.v || 'ekuwEd6iLU8';
+  const args = ['--version'];
+  const proc = spawn('yt-dlp', args);
+  let out = '';
+  proc.stdout.on('data', d => { out += d; });
+  proc.on('close', () => {
+    const version = out.trim();
+    const fmtArgs = ['--list-formats', '--no-warnings', ...ytCookiesArgs, `https://www.youtube.com/watch?v=${vid}`];
+    const proc2 = spawn('yt-dlp', fmtArgs);
+    let out2 = '', err2 = '';
+    proc2.stdout.on('data', d => { out2 += d; });
+    proc2.stderr.on('data', d => { err2 += d; });
+    proc2.on('close', () => {
+      res.json({ version, formats: out2.trim(), stderr: err2.trim(), cookiesLoaded: ytCookiesArgs.length > 0 });
+    });
+  });
+});
+
 // Search YouTube via yt-dlp
 app.get('/api/search', (req, res) => {
   const query = req.query.q;
@@ -143,7 +163,6 @@ app.post('/api/download', (req, res) => {
   downloads.set(downloadId, { status: 'downloading', title: safeName, startedAt: Date.now() });
 
   const proc = spawn('yt-dlp', [
-    '-f', 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
     '-x',
     '--audio-format', 'mp3',
     '--write-thumbnail',
