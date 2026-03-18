@@ -143,10 +143,9 @@ app.post('/api/download', (req, res) => {
   downloads.set(downloadId, { status: 'downloading', title: safeName, startedAt: Date.now() });
 
   const proc = spawn('yt-dlp', [
-    '-f', 'bestaudio',
+    '-f', 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
     '-x',
     '--audio-format', 'mp3',
-    '--audio-quality', '192K',
     '--write-thumbnail',
     '--convert-thumbnails', 'jpg',
     '-o', outputPath,
