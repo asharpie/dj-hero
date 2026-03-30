@@ -523,6 +523,13 @@ class DJGame {
         ctx.strokeStyle = color;
         ctx.stroke();
       }
+
+      // Key label below circle
+      ctx.fillStyle = this.keysDown[keys[lane]] ? color : 'rgba(255,255,255,0.5)';
+      ctx.font = 'bold ' + Math.max(14, laneW * 0.28) + 'px -apple-system, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillText(keys[lane].toUpperCase(), lx, hitZoneY + laneW * 0.4);
     }
 
     // Draw notes
