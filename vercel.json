@@ -1,7 +1,6 @@
 {
   "buildCommand": "",
   "outputDirectory": "public",
-  "analytics": true,
   "rewrites": [
     {
       "source": "/api/:path*",
