@@ -36,11 +36,37 @@
   };
 
   // ─── Screen management ───────────────────────────
+  var _suppressHash = false;
   function showScreen(name) {
     for (var key in screens) {
       screens[key].classList.toggle('active', key === name);
     }
+    if (!_suppressHash && location.hash !== '#' + name) {
+      history.pushState(null, '', '#' + name);
+    }
   }
+
+  // Screens that require in-progress game state — fall back to library on refresh
+  var ephemeralScreens = { game: true, setup: true, results: true };
+
+  function navigateToHash() {
+    var hash = location.hash.replace('#', '');
+    if (!hash || !screens[hash]) { return false; }
+    if (ephemeralScreens[hash]) { hash = 'library'; }
+    if (hash !== 'auth' && !currentUser && !getToken()) {
+      showScreen('auth');
+      return true;
+    }
+    _suppressHash = true;
+    showScreen(hash);
+    _suppressHash = false;
+    if (hash === 'leaderboard') { loadLeaderboard(); }
+    return true;
+  }
+
+  window.addEventListener('hashchange', function () {
+    navigateToHash();
+  });
 
   // ─── Toast notifications ─────────────────────────
   function toast(message, type) {
@@ -848,12 +874,18 @@
     // Setup auth
     setupAuthHandlers();
 
-    // Try auto-login
+    // Try auto-login, then restore screen from URL hash
     tryAutoLogin().then(function (loggedIn) {
       if (loggedIn) {
         enterApp(currentUser);
+        // After enterApp sets up library, navigate to hash if present
+        navigateToHash();
+      } else if (location.hash === '#auth' || !location.hash) {
+        showScreen('auth');
+      } else {
+        // Not logged in but hash present — show auth
+        showScreen('auth');
       }
-      // else stay on auth screen
     });
 
     // Library: search
