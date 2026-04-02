@@ -968,3 +968,34 @@ kbd {
   color: var(--cyan);
   font-weight: 600;
 }
+
+/* library & search buttons */
+.btn-play-lib, .btn-save-lib {
+  background: transparent;
+  color: var(--cyan);
+  border: 1px solid var(--cyan);
+  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+.btn-play-lib:hover { background: var(--cyan); color: #000; }
+.btn-save-lib { color: var(--green); border-color: var(--green); font-size: 20px; }
+.btn-save-lib:hover { background: var(--green); color: #000; }
+.btn-save-lib:disabled { opacity: 0.5; cursor: default; }
+.btn-delete {
+  background: transparent;
+  color: var(--text-dim);
+  border: none;
+  font-size: 16px;
+  padding: 4px 8px;
+  flex-shrink: 0;
+}
+.btn-delete:hover { color: var(--red); }
+.lb-top3 { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+.lb-top3-entry { margin-right: 8px; }

@@ -60,44 +60,44 @@
   // ═══════════════════════ LIBRARY SCREEN ═══════════════════════
 
   async function loadSongs() {
+    if (!currentUser) {
+      songs = [];
+      renderSongList();
+      updatePlayButton();
+      return;
+    }
     try {
-      var res = await fetch('/api/songs');
-      songs = await res.json();
+      var res = await fetch('/api/library', { headers: authHeaders() });
+      var items = await res.json();
+      songs = items.map(function (s) {
+        return {
+          videoId: s.videoId,
+          filename: s.videoId + '.mp3',
+          title: s.title,
+          thumbnail: s.thumbnail || null,
+          size: 0,
+          durationHint: s.duration || 0,
+        };
+      });
     } catch (e) {
       songs = [];
     }
     renderSongList();
     updatePlayButton();
-
-    // Auto-fetch thumbnails for songs that don't have one
-    songs.forEach(function (s) {
-      if (!s.thumbnail) {
-        fetch('/api/fetch-thumbnail', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title: s.title }),
-        })
-          .then(function (r) { return r.json(); })
-          .then(function (data) {
-            if (data.thumbnail) {
-              s.thumbnail = data.thumbnail;
-              renderSongList();
-            }
-          })
-          .catch(function () {});
-      }
-    });
   }
 
   function renderSongList() {
     var container = $('#songs-list');
+    if (!currentUser) {
+      container.innerHTML = '<p class="empty-msg">Log in to save songs to your library.</p>';
+      return;
+    }
     if (songs.length === 0) {
-      container.innerHTML = '<p class="empty-msg">Your library is empty. Search for a song above and hit \u25B6 Play, or download songs to build your library!</p>';
+      container.innerHTML = '<p class="empty-msg">Your library is empty. Search for a song above and hit + to save it!</p>';
       return;
     }
 
     container.innerHTML = songs.map(function (s, i) {
-      var sizeMB = (s.size / 1048576).toFixed(1);
       var artHtml = s.thumbnail
         ? '<img class="song-icon song-art" src="' + escapeHtml(s.thumbnail) + '" alt="" loading="lazy">'
         : '<div class="song-icon">\u266A</div>';
@@ -105,25 +105,45 @@
         artHtml +
         '<div class="song-info">' +
           '<div class="song-title">' + escapeHtml(s.title) + '</div>' +
-          '<div class="song-size">' + sizeMB + ' MB</div>' +
         '</div>' +
-        '<button class="btn-delete" data-filename="' + escapeHtml(s.filename) + '">Delete</button>' +
+        '<button class="btn-play-lib" data-idx="' + i + '">\u25B6</button>' +
+        '<button class="btn-delete" data-videoid="' + escapeHtml(s.videoId) + '">\u2715</button>' +
       '</div>';
     }).join('');
+
+    container.querySelectorAll('.btn-play-lib').forEach(function (btn) {
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var s = songs[parseInt(btn.dataset.idx)];
+        streamAndPlay(s.videoId, s.title, s.thumbnail, s.durationHint);
+      });
+    });
 
     container.querySelectorAll('.btn-delete').forEach(function (btn) {
       btn.addEventListener('click', async function (e) {
         e.stopPropagation();
-        var filename = btn.dataset.filename;
+        var vid = btn.dataset.videoid;
         try {
-          await fetch('/api/songs/' + encodeURIComponent(filename), { method: 'DELETE' });
-          toast('Deleted', 'info');
+          await fetch('/api/library/' + encodeURIComponent(vid), {
+            method: 'DELETE',
+            headers: authHeaders(),
+          });
+          toast('Removed from library', 'info');
           loadSongs();
         } catch (e) {
           toast('Failed to delete', 'error');
         }
       });
     });
+  }
+
+  function addToLibrary(videoId, title, thumbnail, duration) {
+    if (!currentUser) return;
+    fetch('/api/library', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ videoId: videoId, title: title, thumbnail: thumbnail || null, duration: duration || 0 }),
+    }).then(function () { loadSongs(); }).catch(function () {});
   }
 
   function updatePlayButton() {
@@ -154,15 +174,28 @@
         var thumbImg = thumbUrl
           ? '<img src="' + thumbUrl + '" alt="" loading="lazy">'
           : '<img src="" alt="" style="background:#333">';
+        var saveBtn = currentUser ? '<button class="btn-save-lib" data-idx="' + i + '" title="Save to Library">+</button>' : '';
         return '<div class="search-result-item" data-idx="' + i + '">' +
           thumbImg +
           '<div class="search-result-info">' +
             '<div class="search-result-title">' + escapeHtml(r.title) + '</div>' +
             '<div class="search-result-meta">' + escapeHtml(r.channel) + ' \u00B7 ' + (r.durationStr || '?:??') + '</div>' +
           '</div>' +
+          saveBtn +
           '<button class="btn-play-stream" data-idx="' + i + '">\u25B6 Play</button>' +
         '</div>';
       }).join('');
+
+      container.querySelectorAll('.btn-save-lib').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          var r = searchResults[parseInt(btn.dataset.idx)];
+          addToLibrary(r.id, r.title, r.thumbnail, r.duration);
+          btn.textContent = '\u2713';
+          btn.disabled = true;
+          toast('Saved to library', 'success');
+        });
+      });
 
       container.querySelectorAll('.btn-play-stream').forEach(function (btn) {
         btn.addEventListener('click', function (e) {
@@ -200,15 +233,28 @@
         var thumbImg = thumbUrl
           ? '<img src="' + thumbUrl + '" alt="" loading="lazy">'
           : '<img src="" alt="" style="background:#333">';
+        var saveBtn = currentUser ? '<button class="btn-save-lib" data-idx="' + i + '" title="Save to Library">+</button>' : '';
         return '<div class="search-result-item" data-idx="' + i + '">' +
           thumbImg +
           '<div class="search-result-info">' +
             '<div class="search-result-title">' + escapeHtml(r.title) + '</div>' +
             '<div class="search-result-meta">' + escapeHtml(r.channel) + ' \u00B7 ' + (r.durationStr || '?:??') + '</div>' +
           '</div>' +
+          saveBtn +
           '<button class="btn-play-stream" data-idx="' + i + '">\u25B6 Play</button>' +
         '</div>';
       }).join('');
+
+      container.querySelectorAll('.btn-save-lib').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          var r = searchResults[parseInt(btn.dataset.idx)];
+          addToLibrary(r.id, r.title, r.thumbnail, r.duration);
+          btn.textContent = '\u2713';
+          btn.disabled = true;
+          toast('Saved to library', 'success');
+        });
+      });
 
       container.querySelectorAll('.btn-play-stream').forEach(function (btn) {
         btn.addEventListener('click', function (e) {
@@ -487,23 +533,25 @@
       return;
     }
 
-    // Check which songs are already downloaded
-    var downloadedFiles = new Set(songs.map(function (s) { return s.filename; }));
+    // Check which songs are in user's library
+    var libraryIds = new Set(songs.map(function (s) { return s.videoId; }));
 
     listEl.innerHTML = entries.map(function (e, i) {
-      var isDownloaded = downloadedFiles.has(e.songFilename);
-      var dlBtnHtml = '';
-      if (e.songFilename) {
-        if (isDownloaded) {
-          dlBtnHtml = '<span class="lb-dl-btn downloaded">✓ In Library</span>';
+      var videoId = (e.songFilename || '').replace(/\.mp3$/i, '');
+      var looksLikeVideoId = /^[a-zA-Z0-9_-]{11}$/.test(videoId);
+
+      var playBtnHtml = looksLikeVideoId
+        ? '<button class="lb-play-btn" data-videoid="' + escapeHtml(videoId) + '" data-title="' + escapeHtml(e.songTitle) + '">▶ Play</button>'
+        : '';
+
+      var libBtnHtml = '';
+      if (currentUser && looksLikeVideoId) {
+        if (libraryIds.has(videoId)) {
+          libBtnHtml = '<span class="lb-dl-btn downloaded">✓ Saved</span>';
         } else {
-          dlBtnHtml = '<button class="lb-dl-btn" data-filename="' + escapeHtml(e.songFilename) + '" data-title="' + escapeHtml(e.songTitle) + '">+ Library</button>';
+          libBtnHtml = '<button class="lb-dl-btn" data-videoid="' + escapeHtml(videoId) + '" data-title="' + escapeHtml(e.songTitle) + '">+ Library</button>';
         }
       }
-
-      var playBtnHtml = isDownloaded
-        ? '<button class="lb-play-btn" data-filename="' + escapeHtml(e.songFilename) + '">▶ Play</button>'
-        : '';
 
       return '<div class="lb-song-item" data-key="' + escapeHtml(e.key) + '">' +
         '<div class="lb-rank">' + (i + 1) + '</div>' +
@@ -518,7 +566,7 @@
             return '<span class="lb-top3-entry">' + (ti + 1) + '. ' + escapeHtml(t.username) + ' (' + t.score.toLocaleString() + ')</span>';
           }).join(' ') + '</div>' : '') +
         '</div>' +
-        '<div class="lb-song-actions">' + playBtnHtml + dlBtnHtml + '</div>' +
+        '<div class="lb-song-actions">' + playBtnHtml + libBtnHtml + '</div>' +
       '</div>';
     }).join('');
 
@@ -531,31 +579,26 @@
       });
     });
 
-    // Play from leaderboard — launch game directly
+    // Play from leaderboard via YouTube streaming
     listEl.querySelectorAll('.lb-play-btn').forEach(function (btn) {
       btn.addEventListener('click', function (e) {
         e.stopPropagation();
-        var filename = btn.dataset.filename;
-        var song = songs.find(function (s) { return s.filename === filename; });
-        if (song) {
-          selectedSongIdx = songs.indexOf(song);
-          currentSong = song;
-          startGame();
-        } else {
-          toast('Song not in library', 'error');
-        }
+        var videoId = btn.dataset.videoid;
+        var title = btn.dataset.title;
+        streamAndPlay(videoId, title, null, 0);
       });
     });
 
-    // Download from leaderboard
+    // Save to library from leaderboard
     listEl.querySelectorAll('.lb-dl-btn:not(.downloaded)').forEach(function (btn) {
       btn.addEventListener('click', function (e) {
         e.stopPropagation();
-        var filename = btn.dataset.filename;
-        toast('"' + btn.dataset.title + '" should already be in your library. Refreshing...', 'info');
-        loadSongs().then(function () {
-          loadLeaderboard($('#lb-search-input').value.trim());
-        });
+        var videoId = btn.dataset.videoid;
+        var title = btn.dataset.title;
+        addToLibrary(videoId, title, null, 0);
+        btn.textContent = '✓ Saved';
+        btn.classList.add('downloaded');
+        toast('Saved to library', 'success');
       });
     });
   }
@@ -575,16 +618,28 @@
       $('#lb-detail-title').textContent = data.songTitle || key;
       $('#lb-detail-meta').textContent = data.plays + ' total play' + (data.plays !== 1 ? 's' : '');
 
-      // Show play button if song is in library
+      // Show play button — stream via YouTube or from library
       var playBtn = $('#lb-play-song');
       var songFilename = data.songFilename || key;
-      var matchedSong = songs.find(function (s) { return s.filename === songFilename || s.title === (data.songTitle || key); });
+      var songTitle = data.songTitle || key;
+      var matchedSong = songs.find(function (s) { return s.filename === songFilename || s.title === songTitle; });
+      // Extract videoId from filename (e.g. "dQw4w9WgXcQ.mp3" → "dQw4w9WgXcQ")
+      var videoId = songFilename.replace(/\.mp3$/i, '');
+      var looksLikeVideoId = /^[a-zA-Z0-9_-]{11}$/.test(videoId);
+
       if (matchedSong) {
         playBtn.style.display = '';
+        playBtn.textContent = '▶ Play This Song';
         playBtn.onclick = function () {
           selectedSongIdx = songs.indexOf(matchedSong);
           currentSong = matchedSong;
           startGame();
+        };
+      } else if (looksLikeVideoId) {
+        playBtn.style.display = '';
+        playBtn.textContent = '▶ Play This Song';
+        playBtn.onclick = function () {
+          streamAndPlay(videoId, songTitle, null, 0);
         };
       } else {
         playBtn.style.display = 'none';

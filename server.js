@@ -40,6 +40,7 @@ async function initCloud() {
   await mongoDb.collection('songs').createIndex({ filename: 1 }, { unique: true }).catch(() => {});
   await mongoDb.collection('users').createIndex({ email: 1 }, { unique: true }).catch(() => {});
   await mongoDb.collection('users').createIndex({ username: 1 }, { unique: true }).catch(() => {});
+  await mongoDb.collection('user_libraries').createIndex({ username: 1, videoId: 1 }, { unique: true }).catch(() => {});
   console.log('  ☁️  MongoDB connected');
 
   // Cloudflare R2
@@ -556,6 +557,95 @@ app.delete('/api/songs/:filename', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: 'Failed to delete' });
   }
+});
+
+// ═══════════════════════ USER LIBRARY ═══════════════════════
+
+const LIBRARY_FILE = path.join(DATA_DIR, 'libraries.json');
+
+// Get user's library
+app.get('/api/library', async (req, res) => {
+  if (!req.user) return res.json([]);
+
+  if (USE_CLOUD) {
+    const items = await mongoDb.collection('user_libraries')
+      .find({ username: req.user.username })
+      .sort({ addedAt: -1 }).toArray();
+    return res.json(items.map(i => ({
+      id: i._id,
+      videoId: i.videoId,
+      title: i.title,
+      thumbnail: i.thumbnail || null,
+      duration: i.duration || 0,
+      addedAt: i.addedAt,
+    })));
+  }
+
+  // Local mode
+  const libs = readJSON(LIBRARY_FILE, {});
+  res.json(libs[req.user.username] || []);
+});
+
+// Add song to user's library
+app.post('/api/library', async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Login required' });
+
+  const { videoId, title, thumbnail, duration } = req.body;
+  if (!videoId || !title) return res.status(400).json({ error: 'videoId and title required' });
+
+  if (USE_CLOUD) {
+    const col = mongoDb.collection('user_libraries');
+    const existing = await col.findOne({ username: req.user.username, videoId });
+    if (existing) return res.json({ success: true, id: existing._id });
+
+    const result = await col.insertOne({
+      username: req.user.username,
+      videoId,
+      title,
+      thumbnail: thumbnail || null,
+      duration: duration || 0,
+      addedAt: new Date().toISOString(),
+    });
+    return res.json({ success: true, id: result.insertedId });
+  }
+
+  // Local mode
+  const libs = readJSON(LIBRARY_FILE, {});
+  if (!libs[req.user.username]) libs[req.user.username] = [];
+  const existing = libs[req.user.username].find(s => s.videoId === videoId);
+  if (existing) return res.json({ success: true });
+  libs[req.user.username].push({
+    id: Date.now().toString(36),
+    videoId, title,
+    thumbnail: thumbnail || null,
+    duration: duration || 0,
+    addedAt: new Date().toISOString(),
+  });
+  writeJSON(LIBRARY_FILE, libs);
+  res.json({ success: true });
+});
+
+// Remove song from user's library
+app.delete('/api/library/:videoId', async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Login required' });
+
+  const videoId = req.params.videoId;
+
+  if (USE_CLOUD) {
+    await mongoDb.collection('user_libraries').deleteOne({
+      username: req.user.username,
+      videoId,
+    });
+    return res.json({ success: true });
+  }
+
+  // Local mode
+  const libs = readJSON(LIBRARY_FILE, {});
+  if (libs[req.user.username]) {
+    libs[req.user.username] = libs[req.user.username].filter(s => s.videoId !== videoId);
+    writeJSON(LIBRARY_FILE, libs);
+  }
+  res.json({ success: true });
 });
 
 function formatDuration(seconds) {

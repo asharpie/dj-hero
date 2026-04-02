@@ -176,11 +176,11 @@ class DJGame {
     const mapping = this.keyMapping[key];
     if (mapping) {
       e.preventDefault();
+      // Don't trigger hit checks during beat drops (avoids mash penalty)
+      if (this.activeDrop && (this.dropState === 'building' || this.dropState === 'holding')) return;
       this._checkHit(mapping.lane);
       return;
     }
-
-
   }
 
   _handleKeyUp(e) {
@@ -190,6 +190,9 @@ class DJGame {
     // Check for hold note release
     const mapping = this.keyMapping[key];
     if (mapping) {
+      // Don't process hold releases during beat drops
+      if (this.activeDrop && (this.dropState === 'building' || this.dropState === 'holding')) return;
+
       const lane = mapping.lane;
       const holdNote = this.activeHolds[lane];
       if (holdNote) {
@@ -200,6 +203,10 @@ class DJGame {
           // Completed hold
           holdNote.holdCompleted = true;
           this._registerHit('great', lane);
+        } else if (currentTime >= holdEnd) {
+          // Released after hold ended — still counts as completed
+          holdNote.holdCompleted = true;
+          this._registerHit('good', lane);
         } else if (currentTime < holdEnd - this.windows.good) {
           // Released too early — break combo
           this.combo = 0;
@@ -295,9 +302,15 @@ class DJGame {
     // Update audio degradation each frame
     this.audio.updateDegradation(dt);
 
-    // Check for missed notes
+    // Check for missed notes (skip during active beat drops)
     for (const note of this.notes) {
       if (!note.hit && !note.missed && note.time < currentTime - this.windows.good) {
+        // Don't penalize misses during a beat drop
+        if (this.activeDrop && (this.dropState === 'building' || this.dropState === 'holding')) {
+          note.hit = true;
+          note.rating = 'good';
+          continue;
+        }
         note.missed = true;
         this.combo = 0;
         this.lastComboMilestone = 0;
