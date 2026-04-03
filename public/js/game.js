@@ -177,7 +177,7 @@ class DJGame {
     if (mapping) {
       e.preventDefault();
       // Don't trigger hit checks during beat drops (avoids mash penalty)
-      if (this.activeDrop && (this.dropState === 'building' || this.dropState === 'holding')) return;
+      if (this.activeDrop && this.dropState === 'building') return;
       this._checkHit(mapping.lane);
       return;
     }
@@ -191,7 +191,7 @@ class DJGame {
     const mapping = this.keyMapping[key];
     if (mapping) {
       // Don't process hold releases during beat drops
-      if (this.activeDrop && (this.dropState === 'building' || this.dropState === 'holding')) return;
+      if (this.activeDrop && this.dropState === 'building') return;
 
       const lane = mapping.lane;
       const holdNote = this.activeHolds[lane];
@@ -306,7 +306,7 @@ class DJGame {
     for (const note of this.notes) {
       if (!note.hit && !note.missed && note.time < currentTime - this.windows.good) {
         // Don't penalize misses during a beat drop
-        if (this.activeDrop && (this.dropState === 'building' || this.dropState === 'holding')) {
+        if (this.activeDrop && this.dropState === 'building') {
           note.hit = true;
           note.rating = 'good';
           continue;
@@ -1004,35 +1004,18 @@ class DJGame {
             }
           }
         }
-        // Sticky: once all 4 keys are confirmed held, stay true
+        // Check if all 4 keys are currently held
         const allHeldNow = this.keysDown['d'] && this.keysDown['f'] &&
                            this.keysDown['j'] && this.keysDown['k'];
         if (allHeldNow) this.dropAllKeysHeld = true;
-      } else if (currentTime >= drop.dropTime && currentTime < drop.dropTime + 0.3) {
-        // Drop moment — check if keys were released at the right time
-        if (this.activeDrop === drop && this.dropState === 'building') {
+      } else if (currentTime >= drop.dropTime && !drop.scored) {
+        // Past the drop moment — auto-complete if keys were held
+        if (this.activeDrop === drop) {
           if (this.dropAllKeysHeld) {
-            this.dropState = 'holding';
+            this._dropSuccess(drop, currentTime);
           } else {
-            // Didn't hold during build — fail
             this._dropFail(drop);
           }
-        }
-        if (this.dropState === 'holding') {
-          // Check if any key was released (the "drop" trigger)
-          const allHeld = this.keysDown['d'] && this.keysDown['f'] &&
-                          this.keysDown['j'] && this.keysDown['k'];
-          if (!allHeld) {
-            this._dropSuccess(drop, currentTime);
-          }
-        }
-      } else if (currentTime >= drop.dropTime + 0.3 && !drop.scored) {
-        // Past the release window
-        if (this.dropState === 'holding') {
-          // Held too long
-          this._dropFail(drop);
-        } else if (this.activeDrop === drop) {
-          this._dropFail(drop);
         }
       }
     }

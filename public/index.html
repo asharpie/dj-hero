@@ -292,24 +292,30 @@
 
       <!-- Competitive results overlay (reuse after game) -->
       <div id="comp-results" class="comp-section hidden">
-        <h2 id="comp-results-title" class="comp-results-title">Results</h2>
+        <div class="comp-results-header">
+          <h2 id="comp-results-title" class="comp-results-title">Results</h2>
+          <div id="comp-results-song" class="comp-results-song"></div>
+        </div>
         <div class="comp-results-grid">
-          <div class="comp-result-col">
+          <div class="comp-result-col" id="comp-col-me">
             <h3 id="comp-p1-name" class="comp-player-name"></h3>
-            <div id="comp-p1-score" class="comp-player-score"></div>
             <div id="comp-p1-grade" class="comp-player-grade"></div>
+            <div id="comp-p1-score" class="comp-player-score"></div>
             <div id="comp-p1-stats" class="comp-player-stats"></div>
           </div>
           <div class="comp-result-vs">VS</div>
-          <div class="comp-result-col">
+          <div class="comp-result-col" id="comp-col-them">
             <h3 id="comp-p2-name" class="comp-player-name"></h3>
-            <div id="comp-p2-score" class="comp-player-score"></div>
             <div id="comp-p2-grade" class="comp-player-grade"></div>
+            <div id="comp-p2-score" class="comp-player-score"></div>
             <div id="comp-p2-stats" class="comp-player-stats"></div>
           </div>
         </div>
         <div id="comp-mmr-change" class="comp-mmr-change"></div>
-        <button id="comp-back-to-queue" class="btn-primary">Back to Queue</button>
+        <div class="comp-results-actions">
+          <button id="comp-rematch-btn" class="btn-primary">Rematch</button>
+          <button id="comp-back-to-queue" class="btn-secondary">Back to Queue</button>
+        </div>
       </div>
 
       <!-- Waiting overlay during competitive game -->
@@ -319,6 +325,12 @@
         <div id="comp-opponent-live" class="comp-opponent-live"></div>
       </div>
     </div>
+  </div>
+
+  <div id="comp-opponent-hud">
+    <div class="opp-hud-name" id="opp-hud-name">OPPONENT</div>
+    <div class="opp-hud-score" id="opp-hud-score">0</div>
+    <div class="opp-hud-combo">Combo: <span id="opp-hud-combo">0</span></div>
   </div>
 
   <div id="toast-container"></div>

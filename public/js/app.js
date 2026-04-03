@@ -480,6 +480,9 @@
       });
       showScreen('competitive');
       showCompSection('comp-waiting-finish');
+      // Hide opponent HUD
+      var hud = $('#comp-opponent-hud');
+      if (hud) hud.classList.remove('active');
       return;
     }
 
@@ -905,6 +908,8 @@
       if (socket) { socket.disconnect(); socket = null; }
       compGameMode = false;
       currentMatchId = null;
+      var hud = $('#comp-opponent-hud');
+      if (hud) hud.classList.remove('active');
       showScreen('auth');
     });
   }
@@ -936,6 +941,7 @@
     // Challenge received
     socket.on('challenge:received', function (data) {
       if (confirm(data.from + ' challenges you to a competitive match! Accept?')) {
+        compOpponentName = data.from;
         socket.emit('challenge:accept', { from: data.from });
       } else {
         socket.emit('challenge:decline', { from: data.from });
@@ -951,6 +957,7 @@
     // Competitive events
     socket.on('competitive:matched', function (data) {
       currentMatchId = data.matchId;
+      compOpponentName = data.opponent;
       showScreen('competitive');
       showCompSection('comp-song-select');
       $('#comp-opponent-name').textContent = data.opponent;
@@ -965,10 +972,20 @@
 
     socket.on('competitive:start', function (data) {
       compGameMode = true;
-      streamAndPlay(compChosenSong.videoId, compChosenSong.title, compChosenSong.thumbnail || null, compChosenSong.duration || 0);
+      // Show song intro overlay before starting
+      showSongIntro(compChosenSong, compOpponentName, function() {
+        streamAndPlay(compChosenSong.videoId, compChosenSong.title, compChosenSong.thumbnail || null, compChosenSong.duration || 0);
+      });
     });
 
     socket.on('competitive:opponentProgress', function (data) {
+      // Update HUD overlay during game
+      var hud = $('#comp-opponent-hud');
+      if (hud) {
+        hud.classList.add('active');
+        $('#opp-hud-score').textContent = (data.score || 0).toLocaleString();
+        $('#opp-hud-combo').textContent = data.combo || 0;
+      }
       var el = $('#comp-opponent-live');
       if (el) el.innerHTML = 'Opponent: <span>' + (data.score || 0).toLocaleString() + '</span> pts';
     });
@@ -985,6 +1002,7 @@
   }
 
   var compChosenSong = null;
+  var compOpponentName = '';
 
   function showCompSection(sectionId) {
     var sections = ['comp-queue', 'comp-song-select', 'comp-ready', 'comp-results', 'comp-waiting-finish'];
@@ -996,21 +1014,29 @@
 
   function showCompResults(data) {
     showCompSection('comp-results');
+    // Hide opponent HUD
+    var hud = $('#comp-opponent-hud');
+    if (hud) hud.classList.remove('active');
+
     var isP1 = data.player1.username === (currentUser && currentUser.username);
     var me = isP1 ? data.player1 : data.player2;
     var them = isP1 ? data.player2 : data.player1;
 
     var titleEl = $('#comp-results-title');
     if (data.draw) {
-      titleEl.textContent = 'DRAW!';
+      titleEl.textContent = 'DRAW';
       titleEl.className = 'comp-results-title draw';
     } else if (data.winner === me.username) {
-      titleEl.textContent = 'VICTORY!';
+      titleEl.textContent = 'VICTORY';
       titleEl.className = 'comp-results-title win';
     } else {
       titleEl.textContent = 'DEFEAT';
       titleEl.className = 'comp-results-title lose';
     }
+
+    // Song name
+    var songEl = $('#comp-results-song');
+    if (songEl && compChosenSong) songEl.textContent = compChosenSong.title || '';
 
     var gradeColors = { S: '#ffea00', A: '#00e5ff', B: '#00ff88', C: '#ff9800', D: '#ff5722', F: '#ff3d5a' };
 
@@ -1019,19 +1045,31 @@
     $('#comp-p1-score').textContent = (me.score || 0).toLocaleString();
     $('#comp-p1-grade').textContent = me.grade || '-';
     $('#comp-p1-grade').style.color = gradeColors[me.grade] || '#00e5ff';
-    $('#comp-p1-stats').innerHTML = (me.accuracy || 0) + '% accuracy<br>' + (me.maxCombo || 0) + ' max combo';
+    $('#comp-p1-stats').innerHTML =
+      '<div class="comp-stat-row"><span>Accuracy</span><span>' + (me.accuracy || 0) + '%</span></div>' +
+      '<div class="comp-stat-row"><span>Max Combo</span><span>' + (me.maxCombo || 0) + '</span></div>' +
+      (me.hits ? '<div class="comp-stat-row"><span>Perfect</span><span>' + (me.hits.perfect || 0) + '</span></div>' +
+      '<div class="comp-stat-row"><span>Great</span><span>' + (me.hits.great || 0) + '</span></div>' +
+      '<div class="comp-stat-row"><span>Miss</span><span>' + (me.hits.miss || 0) + '</span></div>' : '');
 
     $('#comp-p2-name').textContent = them.username;
     $('#comp-p2-score').textContent = (them.score || 0).toLocaleString();
     $('#comp-p2-grade').textContent = them.grade || '-';
     $('#comp-p2-grade').style.color = gradeColors[them.grade] || '#00e5ff';
-    $('#comp-p2-stats').innerHTML = (them.accuracy || 0) + '% accuracy<br>' + (them.maxCombo || 0) + ' max combo';
+    $('#comp-p2-stats').innerHTML =
+      '<div class="comp-stat-row"><span>Accuracy</span><span>' + (them.accuracy || 0) + '%</span></div>' +
+      '<div class="comp-stat-row"><span>Max Combo</span><span>' + (them.maxCombo || 0) + '</span></div>' +
+      (them.hits ? '<div class="comp-stat-row"><span>Perfect</span><span>' + (them.hits.perfect || 0) + '</span></div>' +
+      '<div class="comp-stat-row"><span>Great</span><span>' + (them.hits.great || 0) + '</span></div>' +
+      '<div class="comp-stat-row"><span>Miss</span><span>' + (them.hits.miss || 0) + '</span></div>' : '');
 
-    // Winner highlight
-    var cols = document.querySelectorAll('.comp-result-col');
-    cols.forEach(function (c) { c.classList.remove('winner'); });
-    if (data.winner === me.username) cols[0].classList.add('winner');
-    else if (data.winner === them.username) cols[1].classList.add('winner');
+    // Winner/loser highlight
+    var colMe = $('#comp-col-me');
+    var colThem = $('#comp-col-them');
+    colMe.classList.remove('winner', 'loser');
+    colThem.classList.remove('winner', 'loser');
+    if (data.winner === me.username) { colMe.classList.add('winner'); colThem.classList.add('loser'); }
+    else if (data.winner === them.username) { colThem.classList.add('winner'); colMe.classList.add('loser'); }
 
     var mmrEl = $('#comp-mmr-change');
     if (data.mmrChange && !data.draw) {
@@ -1048,32 +1086,41 @@
   }
 
   async function loadRankings() {
+    var el = $('#comp-rankings');
+    el.innerHTML = '<div class="spinner"></div>';
     try {
-      var res = await fetch('/api/rankings');
+      var controller = new AbortController();
+      var timeout = setTimeout(function() { controller.abort(); }, 8000);
+      var res = await fetch('/api/rankings', { signal: controller.signal });
+      clearTimeout(timeout);
       var rankings = await res.json();
-      var el = $('#comp-rankings');
       if (rankings.length === 0) {
         el.innerHTML = '<p class="empty-msg">No ranked players yet</p>';
-        return;
-      }
-      el.innerHTML = rankings.map(function (r, i) {
-        return '<div class="comp-rank-item" data-username="' + escapeHtml(r.username) + '">' +
-          '<div class="comp-rank-pos">#' + (i + 1) + '</div>' +
-          '<div class="comp-rank-name">' + escapeHtml(r.username) + '</div>' +
-          '<div class="comp-rank-mmr">' + r.mmr + ' MMR</div>' +
-        '</div>';
-      }).join('');
-      el.querySelectorAll('.comp-rank-item').forEach(function (item) {
-        item.addEventListener('click', function () {
-          loadProfile(item.dataset.username);
+      } else {
+        el.innerHTML = rankings.map(function (r, i) {
+          return '<div class="comp-rank-item" data-username="' + escapeHtml(r.username) + '">' +
+            '<div class="comp-rank-pos">#' + (i + 1) + '</div>' +
+            '<div class="comp-rank-name">' + escapeHtml(r.username) + '</div>' +
+            '<div class="comp-rank-mmr">' + r.mmr + ' MMR</div>' +
+          '</div>';
+        }).join('');
+        el.querySelectorAll('.comp-rank-item').forEach(function (item) {
+          item.addEventListener('click', function () {
+            loadProfile(item.dataset.username);
+          });
         });
-      });
-    } catch (e) {}
+      }
+    } catch (e) {
+      el.innerHTML = '<p class="empty-msg">Could not load rankings</p>';
+    }
 
     // Load own MMR
     if (currentUser) {
       try {
-        var res2 = await fetch('/api/profile/' + encodeURIComponent(currentUser.username), { headers: authHeaders() });
+        var controller2 = new AbortController();
+        var timeout2 = setTimeout(function() { controller2.abort(); }, 5000);
+        var res2 = await fetch('/api/profile/' + encodeURIComponent(currentUser.username), { headers: authHeaders(), signal: controller2.signal });
+        clearTimeout(timeout2);
         var p = await res2.json();
         $('#comp-my-mmr').textContent = p.mmr || 1000;
       } catch (e) {}
@@ -1450,6 +1497,16 @@
       $('#comp-queue-status').classList.add('hidden');
       loadRankings();
     });
+    var rematchBtn = document.getElementById('comp-rematch-btn');
+    if (rematchBtn) {
+      rematchBtn.addEventListener('click', function () {
+        if (!socket) { toast('Not connected', 'error'); return; }
+        showCompSection('comp-queue');
+        $('#comp-find-match').classList.add('hidden');
+        $('#comp-queue-status').classList.remove('hidden');
+        socket.emit('competitive:queue');
+      });
+    }
   }
 
   // ─── Competitive song search ──────────────────────
@@ -1491,6 +1548,52 @@
     } catch (e) {
       container.innerHTML = '<p class="empty-msg">Search failed</p>';
     }
+  }
+
+  // ─── Song intro overlay for competitive ─────────
+  function showSongIntro(song, opponentName, callback) {
+    var overlay = document.createElement('div');
+    overlay.className = 'song-intro-overlay';
+
+    var artHtml;
+    if (song.thumbnail) {
+      artHtml = '<img class="song-intro-art" src="' + escapeHtml(song.thumbnail) + '" alt="">';
+    } else {
+      artHtml = '<div class="song-intro-art-placeholder">\u266A</div>';
+    }
+
+    overlay.innerHTML = artHtml +
+      '<div class="song-intro-title">' + escapeHtml(song.title || 'Unknown') + '</div>' +
+      (opponentName ? '<div class="song-intro-vs">vs <span>' + escapeHtml(opponentName) + '</span></div>' : '') +
+      '<div class="song-intro-countdown" id="intro-countdown">5</div>';
+
+    document.body.appendChild(overlay);
+
+    // Show opponent HUD name
+    var hudName = $('#opp-hud-name');
+    if (hudName && opponentName) hudName.textContent = opponentName;
+    // Reset HUD values
+    $('#opp-hud-score').textContent = '0';
+    $('#opp-hud-combo').textContent = '0';
+
+    var count = 5;
+    var countEl = overlay.querySelector('#intro-countdown');
+    var interval = setInterval(function () {
+      count--;
+      if (count > 0) {
+        countEl.textContent = count;
+      } else if (count === 0) {
+        countEl.textContent = 'GO!';
+        overlay.classList.add('fade-out');
+      } else {
+        clearInterval(interval);
+        overlay.remove();
+        // Show opponent HUD
+        var hud = $('#comp-opponent-hud');
+        if (hud) hud.classList.add('active');
+        callback();
+      }
+    }, 1000);
   }
 
   // ─── Utility ─────────────────────────────────────
