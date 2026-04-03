@@ -53,6 +53,9 @@
       <div class="top-bar-right">
         <span id="user-badge" class="user-badge"></span>
         <button id="btn-logout" class="btn-secondary btn-sm">Logout</button>
+        <button id="btn-go-profile" class="btn-secondary btn-sm">👤 Profile</button>
+        <button id="btn-go-friends" class="btn-secondary btn-sm">🤝 Friends</button>
+        <button id="btn-go-competitive" class="btn-secondary btn-sm">⚔️ Competitive</button>
         <button id="btn-go-leaderboard" class="btn-secondary btn-sm">🏆 Leaderboard</button>
       </div>
     </header>
@@ -201,12 +204,130 @@
     </div>
   </div>
 
+  <!-- ═══════════════════════ PROFILE SCREEN ═══════════════════════ -->
+  <div id="screen-profile" class="screen">
+    <header class="top-bar">
+      <button class="btn-back" id="btn-back-from-profile">← Menu</button>
+      <h1 class="logo">PRO<span class="accent">FILE</span></h1>
+    </header>
+    <div class="profile-content">
+      <div class="profile-header">
+        <div class="profile-avatar">👤</div>
+        <div class="profile-info">
+          <h2 id="profile-username" class="profile-username"></h2>
+          <div class="profile-badges">
+            <span id="profile-mmr" class="profile-mmr-badge">MMR: 1000</span>
+            <span id="profile-online" class="profile-online-badge">Offline</span>
+          </div>
+          <div id="profile-actions" class="profile-actions"></div>
+        </div>
+      </div>
+      <h3 class="profile-section-title">Completed Songs</h3>
+      <div id="profile-scores" class="profile-scores"></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ FRIENDS SCREEN ═══════════════════════ -->
+  <div id="screen-friends" class="screen">
+    <header class="top-bar">
+      <button class="btn-back" id="btn-back-from-friends">← Menu</button>
+      <h1 class="logo">FRI<span class="accent">ENDS</span></h1>
+    </header>
+    <div class="friends-content">
+      <div class="friends-add-section">
+        <h3>Add Friend</h3>
+        <div class="search-bar">
+          <input type="text" id="friend-add-input" placeholder="Enter username..." autocomplete="off">
+          <button id="friend-add-btn">Add</button>
+        </div>
+        <div id="friend-add-result" class="friend-add-result"></div>
+      </div>
+      <div id="friend-requests" class="friend-requests"></div>
+      <h3>Your Friends</h3>
+      <div id="friends-list" class="friends-list">
+        <p class="empty-msg">No friends yet — add someone by username above!</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ COMPETITIVE SCREEN ═══════════════════════ -->
+  <div id="screen-competitive" class="screen">
+    <header class="top-bar">
+      <button class="btn-back" id="btn-back-from-comp">← Menu</button>
+      <h1 class="logo">COMPE<span class="accent">TITIVE</span></h1>
+    </header>
+    <div class="competitive-content">
+      <!-- Queue state -->
+      <div id="comp-queue" class="comp-section">
+        <div id="comp-mmr-display" class="comp-mmr-display">Your MMR: <span id="comp-my-mmr">1000</span></div>
+        <button id="comp-find-match" class="btn-primary btn-glow comp-big-btn">⚔️ Find Match</button>
+        <div id="comp-queue-status" class="comp-queue-status hidden">
+          <div class="spinner"></div>
+          <p>Searching for opponent...</p>
+          <button id="comp-cancel-queue" class="btn-secondary btn-sm">Cancel</button>
+        </div>
+        <h3>Rankings</h3>
+        <div id="comp-rankings" class="comp-rankings"></div>
+      </div>
+
+      <!-- Song selection state -->
+      <div id="comp-song-select" class="comp-section hidden">
+        <h2>Choose Your Song</h2>
+        <p class="comp-opponent-label">vs <span id="comp-opponent-name"></span></p>
+        <div class="search-bar">
+          <input type="text" id="comp-song-search" placeholder="Search for a song..." autocomplete="off">
+          <button id="comp-song-search-btn">Search</button>
+        </div>
+        <div id="comp-song-results" class="comp-song-results"></div>
+        <div id="comp-song-waiting" class="hidden"><div class="spinner"></div><p>Waiting for opponent to pick...</p></div>
+      </div>
+
+      <!-- Ready state -->
+      <div id="comp-ready" class="comp-section hidden">
+        <h2>Song Selected!</h2>
+        <div id="comp-chosen-song" class="comp-chosen-song"></div>
+        <button id="comp-ready-btn" class="btn-primary btn-glow comp-big-btn">Ready!</button>
+        <div id="comp-ready-waiting" class="hidden"><div class="spinner"></div><p>Waiting for opponent...</p></div>
+      </div>
+
+      <!-- Competitive results overlay (reuse after game) -->
+      <div id="comp-results" class="comp-section hidden">
+        <h2 id="comp-results-title" class="comp-results-title">Results</h2>
+        <div class="comp-results-grid">
+          <div class="comp-result-col">
+            <h3 id="comp-p1-name" class="comp-player-name"></h3>
+            <div id="comp-p1-score" class="comp-player-score"></div>
+            <div id="comp-p1-grade" class="comp-player-grade"></div>
+            <div id="comp-p1-stats" class="comp-player-stats"></div>
+          </div>
+          <div class="comp-result-vs">VS</div>
+          <div class="comp-result-col">
+            <h3 id="comp-p2-name" class="comp-player-name"></h3>
+            <div id="comp-p2-score" class="comp-player-score"></div>
+            <div id="comp-p2-grade" class="comp-player-grade"></div>
+            <div id="comp-p2-stats" class="comp-player-stats"></div>
+          </div>
+        </div>
+        <div id="comp-mmr-change" class="comp-mmr-change"></div>
+        <button id="comp-back-to-queue" class="btn-primary">Back to Queue</button>
+      </div>
+
+      <!-- Waiting overlay during competitive game -->
+      <div id="comp-waiting-finish" class="comp-section hidden">
+        <div class="spinner"></div>
+        <h2>Waiting for opponent to finish...</h2>
+        <div id="comp-opponent-live" class="comp-opponent-live"></div>
+      </div>
+    </div>
+  </div>
+
   <div id="toast-container"></div>
 
   <script type="module">
     import { inject } from 'https://cdn.jsdelivr.net/npm/@vercel/analytics@1/+esm';
     inject();
   </script>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
   <script src="js/audio.js"></script>
   <script src="js/yt-audio.js"></script>
   <script src="js/analyzer.js"></script>

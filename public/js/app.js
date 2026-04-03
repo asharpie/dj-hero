@@ -33,6 +33,9 @@
     game: $('#screen-game'),
     results: $('#screen-results'),
     leaderboard: $('#screen-leaderboard'),
+    profile: $('#screen-profile'),
+    friends: $('#screen-friends'),
+    competitive: $('#screen-competitive'),
   };
 
   // ─── Screen management ───────────────────────────
@@ -61,6 +64,8 @@
     showScreen(hash);
     _suppressHash = false;
     if (hash === 'leaderboard') { loadLeaderboard(); }
+    if (hash === 'friends') { loadFriends(); }
+    if (hash === 'competitive') { loadRankings(); }
     return true;
   }
 
@@ -400,6 +405,11 @@
 
         var multi = combo < 10 ? 1 : combo < 30 ? 2 : combo < 60 ? 4 : 8;
         $('#hud-multi-val').textContent = multi + 'x';
+
+        // Send progress to opponent in competitive mode
+        if (compGameMode && currentMatchId && socket) {
+          socket.emit('competitive:scoreUpdate', { matchId: currentMatchId, score: score, combo: combo });
+        }
       };
 
       game.onStateChange = function (state) {
@@ -455,6 +465,23 @@
   function showResults(results) {
     if (game) game.stop();
     if (audioEngine) audioEngine.stop();
+
+    // If competitive mode, send results via socket and show waiting screen
+    if (compGameMode && currentMatchId && socket) {
+      socket.emit('competitive:finish', {
+        matchId: currentMatchId,
+        results: {
+          score: results.score,
+          grade: results.grade,
+          accuracy: results.accuracy,
+          maxCombo: results.combo,
+          hits: results.hits,
+        },
+      });
+      showScreen('competitive');
+      showCompSection('comp-waiting-finish');
+      return;
+    }
 
     showScreen('results');
 
@@ -587,7 +614,7 @@
         '</div>' +
         '<div class="lb-song-stats">' +
           '<div class="lb-song-top-score">' + (e.topScore || 0).toLocaleString() + '</div>' +
-          '<div class="lb-song-top-grade">Best: ' + (e.topGrade || '-') + ' <span class="lb-score-username">by ' + escapeHtml(e.topUser || 'Guest') + '</span></div>' +
+          '<div class="lb-song-top-grade">Best: ' + (e.topGrade || '-') + ' <span class="lb-score-username lb-username-link" data-username="' + escapeHtml(e.topUser || '') + '">by ' + escapeHtml(e.topUser || 'Guest') + '</span></div>' +
           (e.top3 && e.top3.length > 1 ? '<div class="lb-top3">' + e.top3.map(function (t, ti) {
             return '<span class="lb-top3-entry">' + (ti + 1) + '. ' + escapeHtml(t.username) + ' (' + t.score.toLocaleString() + ')</span>';
           }).join(' ') + '</div>' : '') +
@@ -625,6 +652,16 @@
         btn.textContent = '✓ Saved';
         btn.classList.add('downloaded');
         toast('Saved to library', 'success');
+      });
+    });
+
+    // Click username to view profile
+    listEl.querySelectorAll('.lb-username-link').forEach(function (el) {
+      el.style.cursor = 'pointer';
+      el.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var username = el.dataset.username;
+        if (username && username !== 'Guest') loadProfile(username);
       });
     });
   }
@@ -736,6 +773,7 @@
     if (user) {
       $('#user-badge').textContent = user.username;
       $('#btn-logout').style.display = '';
+      connectSocket();
     } else {
       $('#user-badge').textContent = 'Guest';
       $('#btn-logout').textContent = 'Exit Guest';
@@ -864,8 +902,361 @@
     $('#btn-logout').addEventListener('click', function () {
       setToken(null);
       currentUser = null;
+      if (socket) { socket.disconnect(); socket = null; }
+      compGameMode = false;
+      currentMatchId = null;
       showScreen('auth');
     });
+  }
+
+  // ═══════════════════════ SOCKET.IO ═══════════════════════
+
+  var socket = null;
+  var currentMatchId = null;
+  var compGameMode = false;
+
+  function connectSocket() {
+    if (socket) return;
+    var wsUrl = location.hostname === 'localhost' ? location.origin : 'https://dj-hero-production.up.railway.app';
+    socket = io(wsUrl, { transports: ['websocket', 'polling'] });
+    socket.on('connect', function () {
+      var t = getToken();
+      if (t) socket.emit('auth', { token: t });
+    });
+    socket.on('auth:ok', function () { });
+
+    // Friend notifications
+    socket.on('friend:request', function (data) {
+      toast(data.from + ' sent you a friend request!', 'info');
+    });
+    socket.on('friend:accepted', function (data) {
+      toast(data.username + ' accepted your friend request!', 'success');
+    });
+
+    // Challenge received
+    socket.on('challenge:received', function (data) {
+      if (confirm(data.from + ' challenges you to a competitive match! Accept?')) {
+        socket.emit('challenge:accept', { from: data.from });
+      } else {
+        socket.emit('challenge:decline', { from: data.from });
+      }
+    });
+    socket.on('challenge:declined', function (data) {
+      toast(data.username + ' declined your challenge', 'info');
+    });
+    socket.on('challenge:sent', function () {
+      toast('Challenge sent!', 'success');
+    });
+
+    // Competitive events
+    socket.on('competitive:matched', function (data) {
+      currentMatchId = data.matchId;
+      showScreen('competitive');
+      showCompSection('comp-song-select');
+      $('#comp-opponent-name').textContent = data.opponent;
+    });
+
+    socket.on('competitive:songChosen', function (data) {
+      showCompSection('comp-ready');
+      $('#comp-chosen-song').textContent = data.song.title;
+      currentMatchId = data.matchId;
+      compChosenSong = data.song;
+    });
+
+    socket.on('competitive:start', function (data) {
+      compGameMode = true;
+      streamAndPlay(compChosenSong.videoId, compChosenSong.title, compChosenSong.thumbnail || null, compChosenSong.duration || 0);
+    });
+
+    socket.on('competitive:opponentProgress', function (data) {
+      var el = $('#comp-opponent-live');
+      if (el) el.innerHTML = 'Opponent: <span>' + (data.score || 0).toLocaleString() + '</span> pts';
+    });
+
+    socket.on('competitive:opponentFinished', function () {
+      // Opponent is done, we might still be playing
+    });
+
+    socket.on('competitive:results', function (data) {
+      compGameMode = false;
+      showScreen('competitive');
+      showCompResults(data);
+    });
+  }
+
+  var compChosenSong = null;
+
+  function showCompSection(sectionId) {
+    var sections = ['comp-queue', 'comp-song-select', 'comp-ready', 'comp-results', 'comp-waiting-finish'];
+    sections.forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.classList.toggle('hidden', id !== sectionId);
+    });
+  }
+
+  function showCompResults(data) {
+    showCompSection('comp-results');
+    var isP1 = data.player1.username === (currentUser && currentUser.username);
+    var me = isP1 ? data.player1 : data.player2;
+    var them = isP1 ? data.player2 : data.player1;
+
+    var titleEl = $('#comp-results-title');
+    if (data.draw) {
+      titleEl.textContent = 'DRAW!';
+      titleEl.className = 'comp-results-title draw';
+    } else if (data.winner === me.username) {
+      titleEl.textContent = 'VICTORY!';
+      titleEl.className = 'comp-results-title win';
+    } else {
+      titleEl.textContent = 'DEFEAT';
+      titleEl.className = 'comp-results-title lose';
+    }
+
+    var gradeColors = { S: '#ffea00', A: '#00e5ff', B: '#00ff88', C: '#ff9800', D: '#ff5722', F: '#ff3d5a' };
+
+    // Left column = me
+    $('#comp-p1-name').textContent = me.username;
+    $('#comp-p1-score').textContent = (me.score || 0).toLocaleString();
+    $('#comp-p1-grade').textContent = me.grade || '-';
+    $('#comp-p1-grade').style.color = gradeColors[me.grade] || '#00e5ff';
+    $('#comp-p1-stats').innerHTML = (me.accuracy || 0) + '% accuracy<br>' + (me.maxCombo || 0) + ' max combo';
+
+    $('#comp-p2-name').textContent = them.username;
+    $('#comp-p2-score').textContent = (them.score || 0).toLocaleString();
+    $('#comp-p2-grade').textContent = them.grade || '-';
+    $('#comp-p2-grade').style.color = gradeColors[them.grade] || '#00e5ff';
+    $('#comp-p2-stats').innerHTML = (them.accuracy || 0) + '% accuracy<br>' + (them.maxCombo || 0) + ' max combo';
+
+    // Winner highlight
+    var cols = document.querySelectorAll('.comp-result-col');
+    cols.forEach(function (c) { c.classList.remove('winner'); });
+    if (data.winner === me.username) cols[0].classList.add('winner');
+    else if (data.winner === them.username) cols[1].classList.add('winner');
+
+    var mmrEl = $('#comp-mmr-change');
+    if (data.mmrChange && !data.draw) {
+      var isWinner = data.winner === me.username;
+      var change = isWinner ? data.mmrChange.winner : data.mmrChange.loser;
+      var cls = change >= 0 ? 'mmr-gain' : 'mmr-loss';
+      var sign = change >= 0 ? '+' : '';
+      mmrEl.innerHTML = 'MMR: <span class="' + cls + '">' + sign + change + '</span>';
+    } else {
+      mmrEl.innerHTML = 'MMR: unchanged';
+    }
+
+    currentMatchId = null;
+  }
+
+  async function loadRankings() {
+    try {
+      var res = await fetch('/api/rankings');
+      var rankings = await res.json();
+      var el = $('#comp-rankings');
+      if (rankings.length === 0) {
+        el.innerHTML = '<p class="empty-msg">No ranked players yet</p>';
+        return;
+      }
+      el.innerHTML = rankings.map(function (r, i) {
+        return '<div class="comp-rank-item" data-username="' + escapeHtml(r.username) + '">' +
+          '<div class="comp-rank-pos">#' + (i + 1) + '</div>' +
+          '<div class="comp-rank-name">' + escapeHtml(r.username) + '</div>' +
+          '<div class="comp-rank-mmr">' + r.mmr + ' MMR</div>' +
+        '</div>';
+      }).join('');
+      el.querySelectorAll('.comp-rank-item').forEach(function (item) {
+        item.addEventListener('click', function () {
+          loadProfile(item.dataset.username);
+        });
+      });
+    } catch (e) {}
+
+    // Load own MMR
+    if (currentUser) {
+      try {
+        var res2 = await fetch('/api/profile/' + encodeURIComponent(currentUser.username), { headers: authHeaders() });
+        var p = await res2.json();
+        $('#comp-my-mmr').textContent = p.mmr || 1000;
+      } catch (e) {}
+    }
+  }
+
+  // ═══════════════════════ PROFILE ═══════════════════════
+
+  async function loadProfile(username) {
+    showScreen('profile');
+    $('#profile-username').textContent = username;
+    $('#profile-scores').innerHTML = '<div class="spinner"></div>';
+    $('#profile-actions').innerHTML = '';
+
+    try {
+      var res = await fetch('/api/profile/' + encodeURIComponent(username), { headers: authHeaders() });
+      if (!res.ok) { toast('User not found', 'error'); showScreen('library'); return; }
+      var data = await res.json();
+
+      $('#profile-username').textContent = data.username;
+      $('#profile-mmr').textContent = 'MMR: ' + (data.mmr || 1000);
+      var onlineEl = $('#profile-online');
+      onlineEl.textContent = data.online ? 'Online' : 'Offline';
+      onlineEl.className = 'profile-online-badge ' + (data.online ? 'online' : 'offline');
+
+      // Actions
+      var actionsHtml = '';
+      if (data.friendStatus === 'none') {
+        actionsHtml += '<button class="btn-primary btn-sm" id="profile-add-friend">Add Friend</button>';
+      } else if (data.friendStatus === 'pending_sent') {
+        actionsHtml += '<span class="btn-sm" style="color:var(--text-dim)">Request Sent</span>';
+      } else if (data.friendStatus === 'pending_received') {
+        actionsHtml += '<button class="btn-primary btn-sm" id="profile-accept-friend">Accept Request</button>';
+      } else if (data.friendStatus === 'friends') {
+        actionsHtml += '<span class="btn-sm" style="color:var(--green)">✓ Friends</span>';
+        if (data.online) {
+          actionsHtml += '<button class="btn-primary btn-sm" id="profile-challenge">⚔️ Challenge</button>';
+        }
+      }
+      $('#profile-actions').innerHTML = actionsHtml;
+
+      if (document.getElementById('profile-add-friend')) {
+        document.getElementById('profile-add-friend').addEventListener('click', async function () {
+          await fetch('/api/friends/add', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ username: data.username }) });
+          this.textContent = 'Sent!';
+          this.disabled = true;
+        });
+      }
+      if (document.getElementById('profile-accept-friend')) {
+        document.getElementById('profile-accept-friend').addEventListener('click', async function () {
+          await fetch('/api/friends/accept', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ username: data.username }) });
+          this.textContent = '✓ Friends';
+          this.disabled = true;
+        });
+      }
+      if (document.getElementById('profile-challenge')) {
+        document.getElementById('profile-challenge').addEventListener('click', function () {
+          if (socket) socket.emit('challenge:send', { username: data.username });
+        });
+      }
+
+      // Scores
+      var gradeColors = { S: '#ffea00', A: '#00e5ff', B: '#00ff88', C: '#ff9800', D: '#ff5722', F: '#ff3d5a' };
+      var scoresEl = $('#profile-scores');
+      if (!data.scores || data.scores.length === 0) {
+        scoresEl.innerHTML = '<p class="empty-msg">No songs played yet</p>';
+        return;
+      }
+
+      var libraryIds = new Set(songs.map(function (s) { return s.videoId; }));
+
+      scoresEl.innerHTML = data.scores.map(function (s, i) {
+        var videoId = (s.songFilename || '').replace(/\.mp3$/i, '');
+        var looksLikeVideoId = /^[a-zA-Z0-9_-]{11}$/.test(videoId);
+        var playBtn = looksLikeVideoId
+          ? '<button class="btn-play-lib profile-play-btn" data-videoid="' + escapeHtml(videoId) + '" data-title="' + escapeHtml(s.songTitle) + '">▶</button>'
+          : '';
+        var saveBtn = '';
+        if (currentUser && looksLikeVideoId && !libraryIds.has(videoId)) {
+          saveBtn = '<button class="btn-save-lib profile-save-btn" data-videoid="' + escapeHtml(videoId) + '" data-title="' + escapeHtml(s.songTitle) + '">+</button>';
+        }
+        return '<div class="profile-score-item">' +
+          '<div class="profile-score-grade" style="color:' + (gradeColors[s.grade] || '#00e5ff') + '">' + (s.grade || '-') + '</div>' +
+          '<div class="profile-score-info">' +
+            '<div class="profile-score-title">' + escapeHtml(s.songTitle) + '</div>' +
+            '<div class="profile-score-meta">' + (s.accuracy || 0) + '% · ' + (s.maxCombo || 0) + ' combo · ' + (s.difficulty || '?') + '</div>' +
+          '</div>' +
+          '<div class="profile-score-value">' + (s.score || 0).toLocaleString() + '</div>' +
+          playBtn + saveBtn +
+        '</div>';
+      }).join('');
+
+      scoresEl.querySelectorAll('.profile-play-btn').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          streamAndPlay(btn.dataset.videoid, btn.dataset.title, null, 0);
+        });
+      });
+      scoresEl.querySelectorAll('.profile-save-btn').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          addToLibrary(btn.dataset.videoid, btn.dataset.title, null, 0);
+          btn.textContent = '✓';
+          btn.disabled = true;
+          toast('Saved to library', 'success');
+        });
+      });
+    } catch (e) {
+      $('#profile-scores').innerHTML = '<p class="empty-msg">Failed to load profile</p>';
+    }
+  }
+
+  // ═══════════════════════ FRIENDS ═══════════════════════
+
+  async function loadFriends() {
+    try {
+      var res = await fetch('/api/friends', { headers: authHeaders() });
+      var data = await res.json();
+
+      // Incoming requests
+      var reqEl = $('#friend-requests');
+      if (data.incoming && data.incoming.length > 0) {
+        reqEl.innerHTML = '<h3>Friend Requests</h3>' + data.incoming.map(function (r) {
+          return '<div class="friend-request-item">' +
+            '<span class="fr-name">' + escapeHtml(r.username) + '</span>' +
+            '<div class="fr-actions">' +
+              '<button class="btn-primary btn-sm fr-accept" data-username="' + escapeHtml(r.username) + '">Accept</button>' +
+              '<button class="btn-secondary btn-sm fr-decline" data-username="' + escapeHtml(r.username) + '">Decline</button>' +
+            '</div>' +
+          '</div>';
+        }).join('');
+
+        reqEl.querySelectorAll('.fr-accept').forEach(function (btn) {
+          btn.addEventListener('click', async function () {
+            await fetch('/api/friends/accept', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ username: btn.dataset.username }) });
+            loadFriends();
+          });
+        });
+        reqEl.querySelectorAll('.fr-decline').forEach(function (btn) {
+          btn.addEventListener('click', async function () {
+            await fetch('/api/friends/decline', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ username: btn.dataset.username }) });
+            loadFriends();
+          });
+        });
+      } else {
+        reqEl.innerHTML = '';
+      }
+
+      // Friends list
+      var listEl = $('#friends-list');
+      if (!data.friends || data.friends.length === 0) {
+        listEl.innerHTML = '<p class="empty-msg">No friends yet — add someone by username above!</p>';
+        return;
+      }
+      listEl.innerHTML = data.friends.map(function (f) {
+        return '<div class="friend-item">' +
+          '<span class="friend-name">' + escapeHtml(f.username) + '</span>' +
+          '<span class="friend-status ' + (f.online ? 'online' : 'offline') + '">' + (f.online ? 'Online' : 'Offline') + '</span>' +
+          '<div class="friend-actions">' +
+            '<button class="btn-secondary btn-sm friend-view" data-username="' + escapeHtml(f.username) + '">Profile</button>' +
+            (f.online ? '<button class="btn-primary btn-sm friend-challenge" data-username="' + escapeHtml(f.username) + '">⚔️</button>' : '') +
+            '<button class="btn-secondary btn-sm friend-remove" data-username="' + escapeHtml(f.username) + '" style="color:var(--red)">✕</button>' +
+          '</div>' +
+        '</div>';
+      }).join('');
+
+      listEl.querySelectorAll('.friend-view').forEach(function (btn) {
+        btn.addEventListener('click', function () { loadProfile(btn.dataset.username); });
+      });
+      listEl.querySelectorAll('.friend-challenge').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          if (socket) socket.emit('challenge:send', { username: btn.dataset.username });
+        });
+      });
+      listEl.querySelectorAll('.friend-remove').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+          await fetch('/api/friends/' + encodeURIComponent(btn.dataset.username), { method: 'DELETE', headers: authHeaders() });
+          loadFriends();
+        });
+      });
+    } catch (e) {
+      $('#friends-list').innerHTML = '<p class="empty-msg">Failed to load friends</p>';
+    }
   }
 
   // ═══════════════════════ EVENT WIRING ═══════════════════════
@@ -972,6 +1363,134 @@
       var q = this.value.trim();
       lbDebounce = setTimeout(function () { loadLeaderboard(q); }, 300);
     });
+
+    // ─── Profile ───
+    $('#btn-go-profile').addEventListener('click', function () {
+      if (currentUser) loadProfile(currentUser.username);
+      else toast('Log in to view your profile', 'error');
+    });
+    $('#btn-back-from-profile').addEventListener('click', function () {
+      showScreen('library');
+    });
+
+    // ─── Friends ───
+    $('#btn-go-friends').addEventListener('click', function () {
+      if (!currentUser) { toast('Log in to manage friends', 'error'); return; }
+      showScreen('friends');
+      loadFriends();
+    });
+    $('#btn-back-from-friends').addEventListener('click', function () {
+      showScreen('library');
+    });
+    $('#friend-add-btn').addEventListener('click', async function () {
+      var username = $('#friend-add-input').value.trim();
+      if (!username) return;
+      try {
+        var res = await fetch('/api/friends/add', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ username: username }) });
+        var data = await res.json();
+        var resultEl = $('#friend-add-result');
+        if (data.status === 'sent') {
+          resultEl.innerHTML = '<span style="color:var(--green)">Friend request sent!</span>';
+          $('#friend-add-input').value = '';
+          loadFriends();
+        } else if (data.status === 'already_friends') {
+          resultEl.innerHTML = '<span style="color:var(--text-dim)">Already friends!</span>';
+        } else if (data.status === 'already_pending') {
+          resultEl.innerHTML = '<span style="color:var(--text-dim)">Request already pending</span>';
+        } else if (data.error) {
+          resultEl.innerHTML = '<span style="color:var(--red)">' + escapeHtml(data.error) + '</span>';
+        }
+      } catch (e) {
+        $('#friend-add-result').innerHTML = '<span style="color:var(--red)">Failed to send request</span>';
+      }
+    });
+
+    // ─── Competitive ───
+    $('#btn-go-competitive').addEventListener('click', function () {
+      if (!currentUser) { toast('Log in to play competitive', 'error'); return; }
+      showScreen('competitive');
+      showCompSection('comp-queue');
+      loadRankings();
+    });
+    $('#btn-back-from-comp').addEventListener('click', function () {
+      if (socket) socket.emit('competitive:dequeue');
+      showScreen('library');
+    });
+    $('#comp-find-match').addEventListener('click', function () {
+      if (!socket) { toast('Not connected', 'error'); return; }
+      socket.emit('competitive:queue');
+      $('#comp-find-match').classList.add('hidden');
+      $('#comp-queue-status').classList.remove('hidden');
+    });
+    $('#comp-cancel-queue').addEventListener('click', function () {
+      if (socket) socket.emit('competitive:dequeue');
+      $('#comp-find-match').classList.remove('hidden');
+      $('#comp-queue-status').classList.add('hidden');
+    });
+    $('#comp-song-search-btn').addEventListener('click', function () {
+      var q = $('#comp-song-search').value.trim();
+      if (q) compSearchSong(q);
+    });
+    $('#comp-song-search').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') {
+        var q = e.target.value.trim();
+        if (q) compSearchSong(q);
+      }
+    });
+    $('#comp-ready-btn').addEventListener('click', function () {
+      if (socket && currentMatchId) {
+        socket.emit('competitive:ready', { matchId: currentMatchId });
+        $('#comp-ready-btn').classList.add('hidden');
+        $('#comp-ready-waiting').classList.remove('hidden');
+      }
+    });
+    $('#comp-back-to-queue').addEventListener('click', function () {
+      showCompSection('comp-queue');
+      $('#comp-find-match').classList.remove('hidden');
+      $('#comp-queue-status').classList.add('hidden');
+      loadRankings();
+    });
+  }
+
+  // ─── Competitive song search ──────────────────────
+  async function compSearchSong(query) {
+    var container = $('#comp-song-results');
+    container.innerHTML = '<p class="empty-msg">Searching...</p>';
+    try {
+      var res = await fetch('/api/search?q=' + encodeURIComponent(query));
+      if (!res.ok) throw new Error('Search failed');
+      var results = await res.json();
+      if (results.length === 0) {
+        container.innerHTML = '<p class="empty-msg">No results</p>';
+        return;
+      }
+      container.innerHTML = results.map(function (r, i) {
+        return '<div class="search-result-item comp-song-pick" data-idx="' + i + '">' +
+          (r.thumbnail ? '<img src="' + escapeHtml(r.thumbnail) + '" alt="" loading="lazy">' : '') +
+          '<div class="search-result-info">' +
+            '<div class="search-result-title">' + escapeHtml(r.title) + '</div>' +
+            '<div class="search-result-meta">' + escapeHtml(r.channel) + ' · ' + (r.durationStr || '?:??') + '</div>' +
+          '</div>' +
+          '<button class="btn-primary btn-sm">Pick</button>' +
+        '</div>';
+      }).join('');
+      container.querySelectorAll('.comp-song-pick button').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var idx = parseInt(btn.closest('.comp-song-pick').dataset.idx);
+          var r = results[idx];
+          if (socket && currentMatchId) {
+            socket.emit('competitive:selectSong', {
+              matchId: currentMatchId,
+              song: { videoId: r.id, title: r.title, thumbnail: r.thumbnail, duration: r.duration },
+            });
+            container.innerHTML = '<p class="empty-msg">Song picked! Waiting for opponent...</p>';
+            $('#comp-song-waiting').classList.remove('hidden');
+          }
+        });
+      });
+    } catch (e) {
+      container.innerHTML = '<p class="empty-msg">Search failed</p>';
+    }
   }
 
   // ─── Utility ─────────────────────────────────────

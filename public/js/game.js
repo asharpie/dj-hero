@@ -995,10 +995,19 @@ class DJGame {
         if (this.dropState === 'none') {
           this.dropState = 'building';
           this.activeDrop = drop;
+          this.dropAllKeysHeld = false;
+          // Auto-complete any in-progress hold notes so they don't break combo later
+          for (let lane = 0; lane < 4; lane++) {
+            if (this.activeHolds[lane]) {
+              this.activeHolds[lane].holdCompleted = true;
+              this.activeHolds[lane] = null;
+            }
+          }
         }
-        // Check if all 4 keys are held
-        this.dropAllKeysHeld = this.keysDown['d'] && this.keysDown['f'] &&
-                               this.keysDown['j'] && this.keysDown['k'];
+        // Sticky: once all 4 keys are confirmed held, stay true
+        const allHeldNow = this.keysDown['d'] && this.keysDown['f'] &&
+                           this.keysDown['j'] && this.keysDown['k'];
+        if (allHeldNow) this.dropAllKeysHeld = true;
       } else if (currentTime >= drop.dropTime && currentTime < drop.dropTime + 0.3) {
         // Drop moment — check if keys were released at the right time
         if (this.activeDrop === drop && this.dropState === 'building') {
@@ -1033,6 +1042,7 @@ class DJGame {
     drop.scored = true;
     this.dropState = 'none';
     this.activeDrop = null;
+    this.activeHolds = [null, null, null, null];
 
     const timingDiff = Math.abs(currentTime - drop.dropTime);
     const bonus = timingDiff < 0.05 ? 2000 : timingDiff < 0.15 ? 1000 : 500;
@@ -1089,6 +1099,7 @@ class DJGame {
     drop.scored = true;
     this.dropState = 'none';
     this.activeDrop = null;
+    this.activeHolds = [null, null, null, null];
     this.combo = 0;
     this.crowdMeter = Math.max(0, this.crowdMeter - 0.08);
     this.audio.playSFX('drop-fail');

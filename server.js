@@ -5,11 +5,17 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const http = require('http');
+const { Server: SocketIOServer } = require('socket.io');
 
 // ─── Cloud mode detection ──────────────────────────
 const USE_CLOUD = !!(process.env.MONGODB_URI && process.env.R2_ENDPOINT);
 
 const app = express();
+const httpServer = http.createServer(app);
+const io = new SocketIOServer(httpServer, {
+  cors: { origin: '*', methods: ['GET', 'POST'] },
+});
 app.use(express.json());
 
 // CORS: allow Vercel frontend in production, permissive in dev
@@ -41,6 +47,9 @@ async function initCloud() {
   await mongoDb.collection('users').createIndex({ email: 1 }, { unique: true }).catch(() => {});
   await mongoDb.collection('users').createIndex({ username: 1 }, { unique: true }).catch(() => {});
   await mongoDb.collection('user_libraries').createIndex({ username: 1, videoId: 1 }, { unique: true }).catch(() => {});
+  await mongoDb.collection('friends').createIndex({ from: 1, to: 1 }, { unique: true }).catch(() => {});
+  await mongoDb.collection('friends').createIndex({ to: 1, status: 1 }).catch(() => {});
+  await mongoDb.collection('competitive_matches').createIndex({ matchId: 1 }, { unique: true }).catch(() => {});
   console.log('  ☁️  MongoDB connected');
 
   // Cloudflare R2
@@ -875,9 +884,410 @@ app.get('/api/leaderboard', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 
+// ═══════════════════════ FRIENDS ═══════════════════════
+
+// Send friend request
+app.post('/api/friends/add', async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Login required' });
+  const { username } = req.body;
+  if (!username) return res.status(400).json({ error: 'Username required' });
+  if (username === req.user.username) return res.status(400).json({ error: 'Cannot add yourself' });
+
+  if (USE_CLOUD) {
+    const target = await mongoDb.collection('users').findOne({ username });
+    if (!target) return res.status(404).json({ error: 'User not found' });
+    const col = mongoDb.collection('friends');
+    const existing = await col.findOne({
+      $or: [
+        { from: req.user.username, to: username },
+        { from: username, to: req.user.username },
+      ],
+    });
+    if (existing) {
+      if (existing.status === 'accepted') return res.json({ status: 'already_friends' });
+      return res.json({ status: 'already_pending' });
+    }
+    await col.insertOne({ from: req.user.username, to: username, status: 'pending', createdAt: new Date() });
+    // Notify via socket
+    const targetSocket = onlineUsers.get(username);
+    if (targetSocket) targetSocket.emit('friend:request', { from: req.user.username });
+    return res.json({ status: 'sent' });
+  }
+  res.json({ status: 'sent' });
+});
+
+// Accept friend request
+app.post('/api/friends/accept', async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Login required' });
+  const { username } = req.body;
+  if (!username) return res.status(400).json({ error: 'Username required' });
+
+  if (USE_CLOUD) {
+    const result = await mongoDb.collection('friends').updateOne(
+      { from: username, to: req.user.username, status: 'pending' },
+      { $set: { status: 'accepted', acceptedAt: new Date() } }
+    );
+    if (result.matchedCount === 0) return res.status(404).json({ error: 'No pending request found' });
+    const targetSocket = onlineUsers.get(username);
+    if (targetSocket) targetSocket.emit('friend:accepted', { username: req.user.username });
+    return res.json({ status: 'accepted' });
+  }
+  res.json({ status: 'accepted' });
+});
+
+// Decline friend request
+app.post('/api/friends/decline', async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Login required' });
+  const { username } = req.body;
+
+  if (USE_CLOUD) {
+    await mongoDb.collection('friends').deleteOne({ from: username, to: req.user.username, status: 'pending' });
+  }
+  res.json({ status: 'declined' });
+});
+
+// Remove friend
+app.delete('/api/friends/:username', async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Login required' });
+  const username = req.params.username;
+
+  if (USE_CLOUD) {
+    await mongoDb.collection('friends').deleteMany({
+      $or: [
+        { from: req.user.username, to: username },
+        { from: username, to: req.user.username },
+      ],
+    });
+  }
+  res.json({ status: 'removed' });
+});
+
+// List friends + pending requests
+app.get('/api/friends', async (req, res) => {
+  if (!req.user) return res.json({ friends: [], incoming: [], outgoing: [] });
+
+  if (USE_CLOUD) {
+    const col = mongoDb.collection('friends');
+    const all = await col.find({
+      $or: [{ from: req.user.username }, { to: req.user.username }],
+    }).toArray();
+
+    const friends = [], incoming = [], outgoing = [];
+    for (const r of all) {
+      const other = r.from === req.user.username ? r.to : r.from;
+      const isOnline = onlineUsers.has(other);
+      if (r.status === 'accepted') {
+        friends.push({ username: other, online: isOnline });
+      } else if (r.from === req.user.username) {
+        outgoing.push({ username: other });
+      } else {
+        incoming.push({ username: other });
+      }
+    }
+    return res.json({ friends, incoming, outgoing });
+  }
+  res.json({ friends: [], incoming: [], outgoing: [] });
+});
+
+// ═══════════════════════ PROFILE ═══════════════════════
+
+app.get('/api/profile/:username', async (req, res) => {
+  const username = req.params.username;
+
+  if (USE_CLOUD) {
+    const user = await mongoDb.collection('users').findOne({ username });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    // Get personal bests sorted by score
+    const pbs = await mongoDb.collection('personal_bests')
+      .find({ username })
+      .sort({ score: -1 })
+      .toArray();
+
+    const mmr = user.mmr || 1000;
+    const online = onlineUsers.has(username);
+
+    // Check friendship status with requesting user
+    let friendStatus = 'none';
+    if (req.user && req.user.username !== username) {
+      const friendship = await mongoDb.collection('friends').findOne({
+        $or: [
+          { from: req.user.username, to: username },
+          { from: username, to: req.user.username },
+        ],
+      });
+      if (friendship) {
+        if (friendship.status === 'accepted') friendStatus = 'friends';
+        else if (friendship.from === req.user.username) friendStatus = 'pending_sent';
+        else friendStatus = 'pending_received';
+      }
+    } else if (req.user && req.user.username === username) {
+      friendStatus = 'self';
+    }
+
+    return res.json({
+      username,
+      mmr,
+      online,
+      friendStatus,
+      createdAt: user.createdAt,
+      scores: pbs.map(pb => ({
+        songTitle: pb.songTitle,
+        songKey: pb.songKey,
+        score: pb.score,
+        grade: pb.grade,
+        accuracy: pb.accuracy,
+        maxCombo: pb.maxCombo,
+        difficulty: pb.difficulty,
+        date: pb.date,
+        songFilename: pb.songKey || '',
+      })),
+    });
+  }
+
+  res.json({ username, mmr: 1000, online: false, friendStatus: 'none', scores: [] });
+});
+
+// ═══════════════════════ MMR RANKINGS ═══════════════════════
+
+app.get('/api/rankings', async (req, res) => {
+  if (USE_CLOUD) {
+    const users = await mongoDb.collection('users')
+      .find({ mmr: { $exists: true } })
+      .sort({ mmr: -1 })
+      .limit(50)
+      .toArray();
+    return res.json(users.map(u => ({ username: u.username, mmr: u.mmr || 1000 })));
+  }
+  res.json([]);
+});
+
+// ═══════════════════════ COMPETITIVE (Socket.io) ═══════════════════════
+
+const onlineUsers = new Map();    // username → socket
+const matchQueue = [];            // [{ username, socket, mmr }]
+const activeMatches = new Map();  // matchId → match state
+
+function calcElo(winnerMmr, loserMmr, k) {
+  k = k || 32;
+  const eW = 1 / (1 + Math.pow(10, (loserMmr - winnerMmr) / 400));
+  const eL = 1 - eW;
+  return { winnerGain: Math.round(k * (1 - eW)), loserLoss: Math.round(k * eL) };
+}
+
+io.on('connection', (socket) => {
+  let authedUser = null;
+
+  socket.on('auth', (data) => {
+    if (!data || !data.token) return;
+    const user = sessions.get(data.token);
+    if (!user) return socket.emit('auth:fail');
+    authedUser = user.username;
+    onlineUsers.set(authedUser, socket);
+    socket.emit('auth:ok', { username: authedUser });
+  });
+
+  socket.on('competitive:queue', () => {
+    if (!authedUser) return;
+    if (matchQueue.find(q => q.username === authedUser)) return;
+    const userMmr = 1000; // will be fetched from DB
+    if (USE_CLOUD) {
+      mongoDb.collection('users').findOne({ username: authedUser }).then(u => {
+        const mmr = (u && u.mmr) || 1000;
+        matchQueue.push({ username: authedUser, socket, mmr });
+        tryMatchmaking();
+      });
+    } else {
+      matchQueue.push({ username: authedUser, socket, mmr: 1000 });
+      tryMatchmaking();
+    }
+  });
+
+  socket.on('competitive:dequeue', () => {
+    const idx = matchQueue.findIndex(q => q.username === authedUser);
+    if (idx !== -1) matchQueue.splice(idx, 1);
+  });
+
+  socket.on('competitive:selectSong', (data) => {
+    if (!authedUser || !data || !data.matchId) return;
+    const match = activeMatches.get(data.matchId);
+    if (!match) return;
+    const player = match.player1 === authedUser ? 'p1' : match.player2 === authedUser ? 'p2' : null;
+    if (!player) return;
+    match[player + 'Song'] = data.song;
+    if (match.p1Song && match.p2Song) {
+      const chosen = Math.random() < 0.5 ? match.p1Song : match.p2Song;
+      match.chosenSong = chosen;
+      match.status = 'ready';
+      const s1 = onlineUsers.get(match.player1);
+      const s2 = onlineUsers.get(match.player2);
+      if (s1) s1.emit('competitive:songChosen', { matchId: match.matchId, song: chosen });
+      if (s2) s2.emit('competitive:songChosen', { matchId: match.matchId, song: chosen });
+    }
+  });
+
+  socket.on('competitive:ready', (data) => {
+    if (!authedUser || !data || !data.matchId) return;
+    const match = activeMatches.get(data.matchId);
+    if (!match) return;
+    if (match.player1 === authedUser) match.p1Ready = true;
+    else if (match.player2 === authedUser) match.p2Ready = true;
+    if (match.p1Ready && match.p2Ready) {
+      match.status = 'playing';
+      const s1 = onlineUsers.get(match.player1);
+      const s2 = onlineUsers.get(match.player2);
+      if (s1) s1.emit('competitive:start', { matchId: match.matchId });
+      if (s2) s2.emit('competitive:start', { matchId: match.matchId });
+    }
+  });
+
+  socket.on('competitive:scoreUpdate', (data) => {
+    if (!authedUser || !data || !data.matchId) return;
+    const match = activeMatches.get(data.matchId);
+    if (!match) return;
+    const opponent = match.player1 === authedUser ? match.player2 : match.player1;
+    const opponentSocket = onlineUsers.get(opponent);
+    if (opponentSocket) {
+      opponentSocket.emit('competitive:opponentProgress', {
+        score: data.score, combo: data.combo, accuracy: data.accuracy,
+      });
+    }
+  });
+
+  socket.on('competitive:finish', async (data) => {
+    if (!authedUser || !data || !data.matchId) return;
+    const match = activeMatches.get(data.matchId);
+    if (!match || match.status === 'finished') return;
+
+    if (match.player1 === authedUser) {
+      match.p1Results = data.results;
+    } else if (match.player2 === authedUser) {
+      match.p2Results = data.results;
+    }
+
+    // Notify opponent they've finished
+    const opponent = match.player1 === authedUser ? match.player2 : match.player1;
+    const opponentSocket = onlineUsers.get(opponent);
+    if (opponentSocket) opponentSocket.emit('competitive:opponentFinished');
+
+    if (match.p1Results && match.p2Results) {
+      match.status = 'finished';
+      // Determine winner
+      let winner = null, loser = null;
+      if (match.p1Results.score > match.p2Results.score) {
+        winner = match.player1; loser = match.player2;
+      } else if (match.p2Results.score > match.p1Results.score) {
+        winner = match.player2; loser = match.player1;
+      }
+
+      let mmrChange = { winnerGain: 0, loserLoss: 0 };
+      if (USE_CLOUD && winner) {
+        const wUser = await mongoDb.collection('users').findOne({ username: winner });
+        const lUser = await mongoDb.collection('users').findOne({ username: loser });
+        const wMmr = (wUser && wUser.mmr) || 1000;
+        const lMmr = (lUser && lUser.mmr) || 1000;
+        mmrChange = calcElo(wMmr, lMmr);
+        await mongoDb.collection('users').updateOne({ username: winner }, { $set: { mmr: wMmr + mmrChange.winnerGain } });
+        await mongoDb.collection('users').updateOne({ username: loser }, { $set: { mmr: lMmr - mmrChange.loserLoss } });
+      }
+
+      const resultsPayload = {
+        matchId: match.matchId,
+        winner,
+        draw: !winner,
+        player1: { username: match.player1, ...match.p1Results },
+        player2: { username: match.player2, ...match.p2Results },
+        mmrChange: {
+          winner: mmrChange.winnerGain,
+          loser: -mmrChange.loserLoss,
+        },
+      };
+
+      const s1 = onlineUsers.get(match.player1);
+      const s2 = onlineUsers.get(match.player2);
+      if (s1) s1.emit('competitive:results', resultsPayload);
+      if (s2) s2.emit('competitive:results', resultsPayload);
+
+      setTimeout(() => activeMatches.delete(match.matchId), 60000);
+    }
+  });
+
+  // ─── Challenge a friend ───
+  socket.on('challenge:send', (data) => {
+    if (!authedUser || !data || !data.username) return;
+    const targetSocket = onlineUsers.get(data.username);
+    if (!targetSocket) return socket.emit('challenge:error', { error: 'User is offline' });
+    const challengeId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    targetSocket.emit('challenge:received', {
+      challengeId,
+      from: authedUser,
+      song: data.song || null,
+    });
+    socket.emit('challenge:sent', { challengeId, to: data.username });
+  });
+
+  socket.on('challenge:accept', (data) => {
+    if (!authedUser || !data) return;
+    const challengerSocket = onlineUsers.get(data.from);
+    if (!challengerSocket) return;
+    // Create match between challenger and accepter
+    const matchId = 'match_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const match = {
+      matchId,
+      player1: data.from,
+      player2: authedUser,
+      p1Song: null, p2Song: null,
+      chosenSong: null,
+      p1Ready: false, p2Ready: false,
+      p1Results: null, p2Results: null,
+      status: 'songSelect',
+      createdAt: new Date(),
+    };
+    activeMatches.set(matchId, match);
+    challengerSocket.emit('competitive:matched', { matchId, opponent: authedUser });
+    socket.emit('competitive:matched', { matchId, opponent: data.from });
+  });
+
+  socket.on('challenge:decline', (data) => {
+    if (!authedUser || !data) return;
+    const challengerSocket = onlineUsers.get(data.from);
+    if (challengerSocket) challengerSocket.emit('challenge:declined', { username: authedUser });
+  });
+
+  socket.on('disconnect', () => {
+    if (authedUser) {
+      onlineUsers.delete(authedUser);
+      const idx = matchQueue.findIndex(q => q.username === authedUser);
+      if (idx !== -1) matchQueue.splice(idx, 1);
+    }
+  });
+});
+
+function tryMatchmaking() {
+  while (matchQueue.length >= 2) {
+    const p1 = matchQueue.shift();
+    const p2 = matchQueue.shift();
+    const matchId = 'match_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const match = {
+      matchId,
+      player1: p1.username,
+      player2: p2.username,
+      p1Song: null, p2Song: null,
+      chosenSong: null,
+      p1Ready: false, p2Ready: false,
+      p1Results: null, p2Results: null,
+      status: 'songSelect',
+      createdAt: new Date(),
+    };
+    activeMatches.set(matchId, match);
+    p1.socket.emit('competitive:matched', { matchId, opponent: p2.username, opponentMmr: p2.mmr });
+    p2.socket.emit('competitive:matched', { matchId, opponent: p1.username, opponentMmr: p1.mmr });
+  }
+}
+
 async function start() {
   await initCloud();
-  app.listen(PORT, () => {
+  httpServer.listen(PORT, () => {
     console.log(`\n  🎧 DJ Hero is running at http://localhost:${PORT}`);
     console.log(`  📦 Mode: ${USE_CLOUD ? 'CLOUD (R2 + MongoDB)' : 'LOCAL (filesystem)'}\n`);
   });
