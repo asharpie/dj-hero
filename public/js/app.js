@@ -36,6 +36,9 @@
     profile: $('#screen-profile'),
     friends: $('#screen-friends'),
     competitive: $('#screen-competitive'),
+    'comp-lobby': $('#screen-comp-lobby'),
+    'comp-results': $('#screen-comp-results'),
+    'comp-waiting': $('#screen-comp-waiting'),
   };
 
   // ─── Screen management ───────────────────────────
@@ -50,7 +53,7 @@
   }
 
   // Screens that require in-progress game state — fall back to library on refresh
-  var ephemeralScreens = { game: true, setup: true, results: true };
+  var ephemeralScreens = { game: true, setup: true, results: true, 'comp-lobby': true, 'comp-results': true, 'comp-waiting': true };
 
   function navigateToHash() {
     var hash = location.hash.replace('#', '');
@@ -478,8 +481,7 @@
           hits: results.hits,
         },
       });
-      showScreen('competitive');
-      showCompSection('comp-waiting-finish');
+      showScreen('comp-waiting');
       // Hide opponent HUD
       var hud = $('#comp-opponent-hud');
       if (hud) hud.classList.remove('active');
@@ -958,13 +960,13 @@
     socket.on('competitive:matched', function (data) {
       currentMatchId = data.matchId;
       compOpponentName = data.opponent;
-      showScreen('competitive');
-      showCompSection('comp-song-select');
+      showScreen('comp-lobby');
+      showLobbySection('comp-song-select');
       $('#comp-opponent-name').textContent = data.opponent;
     });
 
     socket.on('competitive:songChosen', function (data) {
-      showCompSection('comp-ready');
+      showLobbySection('comp-ready');
       $('#comp-chosen-song').textContent = data.song.title;
       currentMatchId = data.matchId;
       compChosenSong = data.song;
@@ -996,7 +998,7 @@
 
     socket.on('competitive:results', function (data) {
       compGameMode = false;
-      showScreen('competitive');
+      showScreen('comp-results');
       showCompResults(data);
     });
   }
@@ -1004,8 +1006,8 @@
   var compChosenSong = null;
   var compOpponentName = '';
 
-  function showCompSection(sectionId) {
-    var sections = ['comp-queue', 'comp-song-select', 'comp-ready', 'comp-results', 'comp-waiting-finish'];
+  function showLobbySection(sectionId) {
+    var sections = ['comp-song-select', 'comp-ready'];
     sections.forEach(function (id) {
       var el = document.getElementById(id);
       if (el) el.classList.toggle('hidden', id !== sectionId);
@@ -1013,7 +1015,6 @@
   }
 
   function showCompResults(data) {
-    showCompSection('comp-results');
     // Hide opponent HUD
     var hud = $('#comp-opponent-hud');
     if (hud) hud.classList.remove('active');
@@ -1456,12 +1457,16 @@
     $('#btn-go-competitive').addEventListener('click', function () {
       if (!currentUser) { toast('Log in to play competitive', 'error'); return; }
       showScreen('competitive');
-      showCompSection('comp-queue');
       loadRankings();
     });
     $('#btn-back-from-comp').addEventListener('click', function () {
       if (socket) socket.emit('competitive:dequeue');
       showScreen('library');
+    });
+    $('#btn-back-from-lobby').addEventListener('click', function () {
+      // Cancel match / leave lobby
+      if (socket) socket.emit('competitive:dequeue');
+      showScreen('competitive');
     });
     $('#comp-find-match').addEventListener('click', function () {
       if (!socket) { toast('Not connected', 'error'); return; }
@@ -1492,7 +1497,7 @@
       }
     });
     $('#comp-back-to-queue').addEventListener('click', function () {
-      showCompSection('comp-queue');
+      showScreen('competitive');
       $('#comp-find-match').classList.remove('hidden');
       $('#comp-queue-status').classList.add('hidden');
       loadRankings();
@@ -1501,7 +1506,7 @@
     if (rematchBtn) {
       rematchBtn.addEventListener('click', function () {
         if (!socket) { toast('Not connected', 'error'); return; }
-        showCompSection('comp-queue');
+        showScreen('competitive');
         $('#comp-find-match').classList.add('hidden');
         $('#comp-queue-status').classList.remove('hidden');
         socket.emit('competitive:queue');

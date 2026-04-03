@@ -250,30 +250,36 @@
     </div>
   </div>
 
-  <!-- ═══════════════════════ COMPETITIVE SCREEN ═══════════════════════ -->
+  <!-- ═══════════════════════ COMPETITIVE: FIND MATCH ═══════════════════════ -->
   <div id="screen-competitive" class="screen">
     <header class="top-bar">
       <button class="btn-back" id="btn-back-from-comp">← Menu</button>
       <h1 class="logo">COMPE<span class="accent">TITIVE</span></h1>
     </header>
     <div class="competitive-content">
-      <!-- Queue state -->
-      <div id="comp-queue" class="comp-section">
-        <div id="comp-mmr-display" class="comp-mmr-display">Your MMR: <span id="comp-my-mmr">1000</span></div>
-        <button id="comp-find-match" class="btn-primary btn-glow comp-big-btn">⚔️ Find Match</button>
-        <div id="comp-queue-status" class="comp-queue-status hidden">
-          <div class="spinner"></div>
-          <p>Searching for opponent...</p>
-          <button id="comp-cancel-queue" class="btn-secondary btn-sm">Cancel</button>
-        </div>
-        <h3>Rankings</h3>
-        <div id="comp-rankings" class="comp-rankings"></div>
+      <div id="comp-mmr-display" class="comp-mmr-display">Your MMR: <span id="comp-my-mmr">1000</span></div>
+      <button id="comp-find-match" class="btn-primary btn-glow comp-big-btn">⚔️ Find Match</button>
+      <div id="comp-queue-status" class="comp-queue-status hidden">
+        <div class="spinner"></div>
+        <p>Searching for opponent...</p>
+        <button id="comp-cancel-queue" class="btn-secondary btn-sm">Cancel</button>
       </div>
+      <h3>Rankings</h3>
+      <div id="comp-rankings" class="comp-rankings"></div>
+    </div>
+  </div>
 
-      <!-- Song selection state -->
-      <div id="comp-song-select" class="comp-section hidden">
+  <!-- ═══════════════════════ COMPETITIVE: LOBBY ═══════════════════════ -->
+  <div id="screen-comp-lobby" class="screen">
+    <header class="top-bar">
+      <button class="btn-back" id="btn-back-from-lobby">← Cancel</button>
+      <h1 class="logo">VS <span class="accent" id="comp-opponent-name">Opponent</span></h1>
+    </header>
+    <div class="comp-lobby-content">
+      <!-- Song selection -->
+      <div id="comp-song-select" class="comp-lobby-section">
         <h2>Choose Your Song</h2>
-        <p class="comp-opponent-label">vs <span id="comp-opponent-name"></span></p>
+        <p class="comp-hint">Both players pick a song. One will be chosen at random.</p>
         <div class="search-bar">
           <input type="text" id="comp-song-search" placeholder="Search for a song..." autocomplete="off">
           <button id="comp-song-search-btn">Search</button>
@@ -283,47 +289,51 @@
       </div>
 
       <!-- Ready state -->
-      <div id="comp-ready" class="comp-section hidden">
+      <div id="comp-ready" class="comp-lobby-section hidden">
         <h2>Song Selected!</h2>
         <div id="comp-chosen-song" class="comp-chosen-song"></div>
         <button id="comp-ready-btn" class="btn-primary btn-glow comp-big-btn">Ready!</button>
         <div id="comp-ready-waiting" class="hidden"><div class="spinner"></div><p>Waiting for opponent...</p></div>
       </div>
+    </div>
+  </div>
 
-      <!-- Competitive results overlay (reuse after game) -->
-      <div id="comp-results" class="comp-section hidden">
-        <div class="comp-results-header">
-          <h2 id="comp-results-title" class="comp-results-title">Results</h2>
-          <div id="comp-results-song" class="comp-results-song"></div>
+  <!-- ═══════════════════════ COMPETITIVE: RESULTS ═══════════════════════ -->
+  <div id="screen-comp-results" class="screen">
+    <div class="comp-results-page">
+      <div class="comp-results-header">
+        <h1 id="comp-results-title" class="comp-results-title">Results</h1>
+        <div id="comp-results-song" class="comp-results-song"></div>
+      </div>
+      <div class="comp-results-grid">
+        <div class="comp-result-col" id="comp-col-me">
+          <h3 id="comp-p1-name" class="comp-player-name"></h3>
+          <div id="comp-p1-grade" class="comp-player-grade"></div>
+          <div id="comp-p1-score" class="comp-player-score"></div>
+          <div id="comp-p1-stats" class="comp-player-stats"></div>
         </div>
-        <div class="comp-results-grid">
-          <div class="comp-result-col" id="comp-col-me">
-            <h3 id="comp-p1-name" class="comp-player-name"></h3>
-            <div id="comp-p1-grade" class="comp-player-grade"></div>
-            <div id="comp-p1-score" class="comp-player-score"></div>
-            <div id="comp-p1-stats" class="comp-player-stats"></div>
-          </div>
-          <div class="comp-result-vs">VS</div>
-          <div class="comp-result-col" id="comp-col-them">
-            <h3 id="comp-p2-name" class="comp-player-name"></h3>
-            <div id="comp-p2-grade" class="comp-player-grade"></div>
-            <div id="comp-p2-score" class="comp-player-score"></div>
-            <div id="comp-p2-stats" class="comp-player-stats"></div>
-          </div>
-        </div>
-        <div id="comp-mmr-change" class="comp-mmr-change"></div>
-        <div class="comp-results-actions">
-          <button id="comp-rematch-btn" class="btn-primary">Rematch</button>
-          <button id="comp-back-to-queue" class="btn-secondary">Back to Queue</button>
+        <div class="comp-result-vs">VS</div>
+        <div class="comp-result-col" id="comp-col-them">
+          <h3 id="comp-p2-name" class="comp-player-name"></h3>
+          <div id="comp-p2-grade" class="comp-player-grade"></div>
+          <div id="comp-p2-score" class="comp-player-score"></div>
+          <div id="comp-p2-stats" class="comp-player-stats"></div>
         </div>
       </div>
-
-      <!-- Waiting overlay during competitive game -->
-      <div id="comp-waiting-finish" class="comp-section hidden">
-        <div class="spinner"></div>
-        <h2>Waiting for opponent to finish...</h2>
-        <div id="comp-opponent-live" class="comp-opponent-live"></div>
+      <div id="comp-mmr-change" class="comp-mmr-change"></div>
+      <div class="comp-results-actions">
+        <button id="comp-rematch-btn" class="btn-primary">Rematch</button>
+        <button id="comp-back-to-queue" class="btn-secondary">Back to Queue</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ COMPETITIVE: WAITING ═══════════════════════ -->
+  <div id="screen-comp-waiting" class="screen">
+    <div class="comp-waiting-page">
+      <div class="spinner"></div>
+      <h2>Waiting for opponent to finish...</h2>
+      <div id="comp-opponent-live" class="comp-opponent-live"></div>
     </div>
   </div>
 
