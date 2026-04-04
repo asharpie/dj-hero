@@ -56,6 +56,7 @@
         <button id="btn-go-profile" class="btn-secondary btn-sm">👤 Profile</button>
         <button id="btn-go-friends" class="btn-secondary btn-sm">🤝 Friends</button>
         <button id="btn-go-competitive" class="btn-secondary btn-sm">⚔️ Competitive</button>
+        <button id="btn-go-br" class="btn-secondary btn-sm">👑 Battle Royale</button>
         <button id="btn-go-leaderboard" class="btn-secondary btn-sm">🏆 Leaderboard</button>
       </div>
     </header>
@@ -337,10 +338,83 @@
     </div>
   </div>
 
-  <div id="comp-opponent-hud">
-    <div class="opp-hud-name" id="opp-hud-name">OPPONENT</div>
-    <div class="opp-hud-score" id="opp-hud-score">0</div>
-    <div class="opp-hud-combo">Combo: <span id="opp-hud-combo">0</span></div>
+  <!-- ═══════════════════════ BATTLE ROYALE: QUEUE ═══════════════════════ -->
+  <div id="screen-br-queue" class="screen">
+    <header class="top-bar">
+      <button class="btn-back" id="btn-back-from-br">← Menu</button>
+      <h1 class="logo">BATTLE <span class="accent">ROYALE</span></h1>
+    </header>
+    <div class="br-queue-content">
+      <div class="br-queue-info">
+        <h2>👑 Battle Royale</h2>
+        <p class="br-desc">9 players. 3 rounds. Only the best survive.</p>
+        <div id="br-mmr-display" class="comp-mmr-display">Your MMR: <span id="br-my-mmr">1000</span></div>
+      </div>
+      <button id="br-find-match" class="btn-primary btn-glow comp-big-btn">🎯 Find Match</button>
+      <div id="br-queue-status" class="br-queue-status hidden">
+        <div class="spinner"></div>
+        <p>Searching for players... <span id="br-player-count">0</span>/9</p>
+        <div id="br-bot-timer" class="br-bot-timer"></div>
+        <button id="br-cancel-queue" class="btn-secondary btn-sm">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ BATTLE ROYALE: LOBBY ═══════════════════════ -->
+  <div id="screen-br-lobby" class="screen">
+    <header class="top-bar">
+      <button class="btn-back" id="btn-back-from-br-lobby">← Leave</button>
+      <h1 class="logo">BATTLE <span class="accent">ROYALE</span></h1>
+    </header>
+    <div class="br-lobby-content">
+      <div class="br-players-list">
+        <h3>Players (<span id="br-lobby-count">0</span>/9)</h3>
+        <div id="br-lobby-players" class="br-lobby-players"></div>
+      </div>
+      <div class="br-song-select">
+        <h3>Choose Your Song</h3>
+        <p class="comp-hint">A random player's song will be chosen.</p>
+        <div class="search-bar">
+          <input type="text" id="br-song-search" placeholder="Search for a song..." autocomplete="off">
+          <button id="br-song-search-btn">Search</button>
+        </div>
+        <div id="br-song-results" class="comp-song-results"></div>
+        <div id="br-song-picked" class="hidden"><p class="empty-msg">✓ Song picked! Waiting for match to start...</p></div>
+      </div>
+      <div id="br-lobby-timer" class="br-lobby-timer"></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ BATTLE ROYALE: RESULTS ═══════════════════════ -->
+  <div id="screen-br-results" class="screen">
+    <div class="br-results-page">
+      <h1 class="br-results-title">BATTLE <span class="accent">ROYALE</span></h1>
+      <div id="br-placement" class="br-placement"></div>
+      <div class="br-podium">
+        <div class="br-podium-slot br-podium-2" id="br-podium-2">
+          <div class="br-podium-name"></div>
+          <div class="br-podium-score"></div>
+          <div class="br-podium-block">2nd</div>
+        </div>
+        <div class="br-podium-slot br-podium-1" id="br-podium-1">
+          <div class="br-podium-crown">👑</div>
+          <div class="br-podium-name"></div>
+          <div class="br-podium-score"></div>
+          <div class="br-podium-block">1st</div>
+        </div>
+        <div class="br-podium-slot br-podium-3" id="br-podium-3">
+          <div class="br-podium-name"></div>
+          <div class="br-podium-score"></div>
+          <div class="br-podium-block">3rd</div>
+        </div>
+      </div>
+      <div id="br-mmr-change" class="comp-mmr-change"></div>
+      <div id="br-full-standings" class="br-full-standings"></div>
+      <div class="comp-results-actions">
+        <button id="br-play-again" class="btn-primary">Play Again</button>
+        <button id="br-back-to-menu" class="btn-secondary">Back to Menu</button>
+      </div>
+    </div>
   </div>
 
   <div id="toast-container"></div>

@@ -39,6 +39,9 @@
     'comp-lobby': $('#screen-comp-lobby'),
     'comp-results': $('#screen-comp-results'),
     'comp-waiting': $('#screen-comp-waiting'),
+    'br-queue': $('#screen-br-queue'),
+    'br-lobby': $('#screen-br-lobby'),
+    'br-results': $('#screen-br-results'),
   };
 
   // ─── Screen management ───────────────────────────
@@ -53,7 +56,7 @@
   }
 
   // Screens that require in-progress game state — fall back to library on refresh
-  var ephemeralScreens = { game: true, setup: true, results: true, 'comp-lobby': true, 'comp-results': true, 'comp-waiting': true };
+  var ephemeralScreens = { game: true, setup: true, results: true, 'comp-lobby': true, 'comp-results': true, 'comp-waiting': true, 'br-lobby': true, 'br-results': true };
 
   function navigateToHash() {
     var hash = location.hash.replace('#', '');
@@ -405,6 +408,12 @@
         game.setCompetitiveMode(true, compOpponentName);
       }
 
+      // Enable battle royale mode
+      if (brGameMode) {
+        var myName = currentUser && currentUser.username;
+        game.setBRMode(true, myName, brPlayers);
+      }
+
       // Wire callbacks
       game.onScoreUpdate = function (score, combo, crowd) {
         $('#hud-score-val').textContent = score.toLocaleString();
@@ -418,12 +427,24 @@
         if (compGameMode && currentMatchId && socket) {
           socket.emit('competitive:scoreUpdate', { matchId: currentMatchId, score: score, combo: combo });
         }
+
+        // Send progress in BR mode
+        if (brGameMode && brMatchId && socket) {
+          var brResults = game._getResults();
+          socket.emit('br:scoreUpdate', {
+            matchId: brMatchId, score: score, combo: combo,
+            accuracy: brResults.accuracy, hits: brResults.hits,
+          });
+        }
       };
 
-      // Send keypresses to opponent for side-by-side view
+      // Send keypresses for multiplayer view
       game.onKeyUpdate = function (keys) {
         if (compGameMode && currentMatchId && socket) {
           socket.emit('competitive:keyUpdate', { matchId: currentMatchId, keys: keys });
+        }
+        if (brGameMode && brMatchId && socket) {
+          socket.emit('br:keyUpdate', { matchId: brMatchId, keys: keys });
         }
       };
 
@@ -481,6 +502,21 @@
     if (game) game.stop();
     if (audioEngine) audioEngine.stop();
 
+    // If BR mode, send final results and wait for server results
+    if (brGameMode && brMatchId && socket) {
+      socket.emit('br:finish', {
+        matchId: brMatchId,
+        results: {
+          score: results.score,
+          accuracy: results.accuracy,
+          maxCombo: results.combo,
+          hits: results.hits,
+        },
+      });
+      // Stay on game screen — br:results event will show results
+      return;
+    }
+
     // If competitive mode, send results via socket and show waiting screen
     if (compGameMode && currentMatchId && socket) {
       socket.emit('competitive:finish', {
@@ -494,9 +530,6 @@
         },
       });
       showScreen('comp-waiting');
-      // Hide opponent HUD
-      var hud = $('#comp-opponent-hud');
-      if (hud) hud.classList.remove('active');
       return;
     }
 
@@ -923,8 +956,6 @@
       compGameMode = false;
       currentMatchId = null;
       inQueue = false;
-      var hud = $('#comp-opponent-hud');
-      if (hud) hud.classList.remove('active');
       showScreen('auth');
     });
   }
@@ -935,6 +966,14 @@
   var currentMatchId = null;
   var compGameMode = false;
   var inQueue = false;
+
+  // Battle Royale state
+  var brGameMode = false;
+  var brMatchId = null;
+  var brInQueue = false;
+  var brPlayers = []; // [{ username, isBot, score, combo, eliminated, keys }]
+  var brChosenSong = null;
+  var brQueueTimerStart = 0;
 
   function connectSocket() {
     if (socket) return;
@@ -1006,13 +1045,6 @@
       if (game && game.competitiveMode) {
         game.updateOpponentState({ score: data.score || 0, combo: data.combo || 0 });
       }
-      // Also update the HUD overlay as fallback
-      var hud = $('#comp-opponent-hud');
-      if (hud && !game) {
-        hud.classList.add('active');
-        $('#opp-hud-score').textContent = (data.score || 0).toLocaleString();
-        $('#opp-hud-combo').textContent = data.combo || 0;
-      }
       var el = $('#comp-opponent-live');
       if (el) el.innerHTML = 'Opponent: <span>' + (data.score || 0).toLocaleString() + '</span> pts';
     });
@@ -1081,11 +1113,89 @@
       currentMatchId = null;
       compGameMode = false;
       inQueue = false;
-      var hud = $('#comp-opponent-hud');
-      if (hud) hud.classList.remove('active');
       showScreen('competitive');
       resetCompetitiveScreen();
       loadRankings();
+    });
+
+    // ─── Battle Royale socket events ───
+    socket.on('br:queueUpdate', function (data) {
+      var el = $('#br-player-count');
+      if (el) el.textContent = data.count || 0;
+    });
+
+    socket.on('br:matched', function (data) {
+      brInQueue = false;
+      brMatchId = data.matchId;
+      brPlayers = data.players || [];
+      showScreen('br-lobby');
+      renderBRLobbyPlayers();
+      $('#br-song-results').innerHTML = '';
+      $('#br-song-search').value = '';
+      $('#br-song-picked').classList.add('hidden');
+    });
+
+    socket.on('br:start', function (data) {
+      brGameMode = true;
+      brChosenSong = data.song;
+      showSongIntro(data.song, null, function () {
+        streamAndPlay(data.song.videoId, data.song.title, data.song.thumbnail || null, data.song.duration || 0);
+      });
+    });
+
+    socket.on('br:scores', function (data) {
+      if (!data.scores) return;
+      // Update local player data
+      for (var i = 0; i < data.scores.length; i++) {
+        var s = data.scores[i];
+        var existing = brPlayers.find(function (p) { return p.username === s.username; });
+        if (existing) {
+          existing.score = s.score;
+          existing.combo = s.combo;
+          existing.eliminated = s.eliminated;
+          existing.keys = s.keys || {};
+        }
+      }
+      // Feed to game engine for mini board rendering
+      if (game && game.brMode) {
+        game.updateBRPlayers(brPlayers);
+      }
+    });
+
+    socket.on('br:elimination', function (data) {
+      if (!data.eliminated) return;
+      // Mark players as eliminated locally
+      data.eliminated.forEach(function (name) {
+        var p = brPlayers.find(function (pp) { return pp.username === name; });
+        if (p) p.eliminated = true;
+      });
+      if (game && game.brMode) {
+        game.updateBRPlayers(brPlayers);
+      }
+      var myName = currentUser && currentUser.username;
+      if (data.eliminated.indexOf(myName) !== -1) {
+        toast('You were eliminated!', 'error');
+      } else {
+        toast(data.eliminated.join(', ') + ' eliminated!', 'info');
+      }
+    });
+
+    socket.on('br:results', function (data) {
+      brGameMode = false;
+      if (game) game.stop();
+      if (audioEngine) audioEngine.stop();
+      showScreen('br-results');
+      showBRResults(data);
+      brMatchId = null;
+    });
+
+    socket.on('br:cancelled', function (data) {
+      brGameMode = false;
+      brMatchId = null;
+      brInQueue = false;
+      toast(data.reason || 'Match cancelled', 'error');
+      showScreen('br-queue');
+      resetBRQueueScreen();
     });
   }
 
@@ -1108,9 +1218,6 @@
   }
 
   function showCompResults(data) {
-    // Hide opponent HUD
-    var hud = $('#comp-opponent-hud');
-    if (hud) hud.classList.remove('active');
 
     var isP1 = data.player1.username === (currentUser && currentUser.username);
     var me = isP1 ? data.player1 : data.player2;
@@ -1177,6 +1284,130 @@
     }
 
     currentMatchId = null;
+  }
+
+  // ═══════════════════════ BATTLE ROYALE HELPERS ═══════════════════════
+
+  function resetBRQueueScreen() {
+    $('#br-find-match').classList.remove('hidden');
+    $('#br-queue-status').classList.add('hidden');
+    $('#br-player-count').textContent = '0';
+    $('#br-bot-timer').textContent = '';
+  }
+
+  function updateBRQueueTimer() {
+    if (!brInQueue) return;
+    var elapsed = Date.now() - brQueueTimerStart;
+    var remaining = Math.max(0, Math.ceil((30000 - elapsed) / 1000));
+    var timerEl = $('#br-bot-timer');
+    if (remaining > 0) {
+      timerEl.textContent = 'Filling with bots in ' + remaining + 's...';
+      setTimeout(updateBRQueueTimer, 1000);
+    } else {
+      timerEl.textContent = 'Filling with bots...';
+    }
+  }
+
+  function renderBRLobbyPlayers() {
+    var container = $('#br-lobby-players');
+    var countEl = $('#br-lobby-count');
+    countEl.textContent = brPlayers.length;
+    container.innerHTML = brPlayers.map(function (p) {
+      var cls = 'br-player-tag' + (p.isBot ? ' bot' : '');
+      return '<span class="' + cls + '">' + escapeHtml(p.username) + '</span>';
+    }).join('');
+  }
+
+  async function brSearchSong(query) {
+    var container = $('#br-song-results');
+    container.innerHTML = '<p class="empty-msg">Searching...</p>';
+    try {
+      var res = await fetch('/api/search?q=' + encodeURIComponent(query));
+      if (!res.ok) throw new Error('Search failed');
+      var results = await res.json();
+      if (results.length === 0) {
+        container.innerHTML = '<p class="empty-msg">No results</p>';
+        return;
+      }
+      container.innerHTML = results.map(function (r, i) {
+        return '<div class="search-result-item br-song-pick" data-idx="' + i + '">' +
+          (r.thumbnail ? '<img src="' + escapeHtml(r.thumbnail) + '" alt="" loading="lazy">' : '') +
+          '<div class="search-result-info">' +
+            '<div class="search-result-title">' + escapeHtml(r.title) + '</div>' +
+            '<div class="search-result-meta">' + escapeHtml(r.channel) + ' · ' + (r.durationStr || '?:??') + '</div>' +
+          '</div>' +
+          '<button class="btn-primary btn-sm">Pick</button>' +
+        '</div>';
+      }).join('');
+      container.querySelectorAll('.br-song-pick button').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var idx = parseInt(btn.closest('.br-song-pick').dataset.idx);
+          var r = results[idx];
+          if (socket && brMatchId) {
+            socket.emit('br:selectSong', {
+              matchId: brMatchId,
+              song: { videoId: r.id, title: r.title, thumbnail: r.thumbnail, duration: r.duration },
+            });
+            container.innerHTML = '';
+            $('#br-song-picked').classList.remove('hidden');
+          }
+        });
+      });
+    } catch (e) {
+      container.innerHTML = '<p class="empty-msg">Search failed</p>';
+    }
+  }
+
+  function showBRResults(data) {
+    var myName = currentUser && currentUser.username;
+    var standings = data.standings || [];
+    var myStanding = standings.find(function (s) { return s.username === myName; });
+
+    // Placement text
+    var placementEl = $('#br-placement');
+    if (myStanding) {
+      var rank = myStanding.rank;
+      var suffix = rank === 1 ? 'st' : rank === 2 ? 'nd' : rank === 3 ? 'rd' : 'th';
+      placementEl.textContent = 'You placed ' + rank + suffix + '!';
+      placementEl.className = 'br-placement' + (rank === 1 ? ' winner' : rank <= 3 ? ' top3' : ' eliminated');
+    } else {
+      placementEl.textContent = '';
+    }
+
+    // Podium
+    var top3 = standings.slice(0, 3);
+    for (var i = 0; i < 3; i++) {
+      var slot = document.getElementById('br-podium-' + (i + 1));
+      var player = top3[i];
+      if (slot && player) {
+        slot.querySelector('.br-podium-name').textContent = player.username;
+        slot.querySelector('.br-podium-score').textContent = (player.score || 0).toLocaleString() + ' pts';
+      }
+    }
+
+    // MMR change
+    var mmrEl = $('#br-mmr-change');
+    if (myStanding && myStanding.mmrChange) {
+      var change = myStanding.mmrChange;
+      var cls = change >= 0 ? 'mmr-gain' : 'mmr-loss';
+      var sign = change >= 0 ? '+' : '';
+      mmrEl.innerHTML = 'MMR: <span class="' + cls + '">' + sign + change + '</span>';
+    } else {
+      mmrEl.innerHTML = '';
+    }
+
+    // Full standings
+    var standingsEl = $('#br-full-standings');
+    standingsEl.innerHTML = '<h3 style="margin-bottom:8px">Full Standings</h3>' +
+      standings.map(function (s) {
+        var rowClass = 'br-standing-row';
+        if (s.eliminated) rowClass += ' eliminated';
+        if (s.username === myName) rowClass += ' self';
+        return '<div class="' + rowClass + '">' +
+          '<span>#' + s.rank + ' ' + escapeHtml(s.username) + (s.isBot ? ' 🤖' : '') + '</span>' +
+          '<span>' + (s.score || 0).toLocaleString() + '</span>' +
+        '</div>';
+      }).join('');
   }
 
   async function loadRankings() {
@@ -1472,11 +1703,15 @@
       if (compGameMode && currentMatchId && socket) {
         socket.emit('competitive:abandon', { matchId: currentMatchId });
       }
-      // Hide opponent HUD
-      var hud = $('#comp-opponent-hud');
-      if (hud) hud.classList.remove('active');
       compGameMode = false;
       currentMatchId = null;
+
+      // If in BR mode, emit abandon
+      if (brGameMode && brMatchId && socket) {
+        socket.emit('br:abandon', { matchId: brMatchId });
+      }
+      brGameMode = false;
+      brMatchId = null;
 
       showScreen('library');
     });
@@ -1612,8 +1847,6 @@
     $('#comp-back-to-queue').addEventListener('click', function () {
       compGameMode = false;
       currentMatchId = null;
-      var hud = $('#comp-opponent-hud');
-      if (hud) hud.classList.remove('active');
       showScreen('competitive');
       inQueue = false;
       resetCompetitiveScreen();
@@ -1630,6 +1863,66 @@
         socket.emit('competitive:queue');
       });
     }
+
+    // ─── Battle Royale ───
+    $('#btn-go-br').addEventListener('click', function () {
+      if (!currentUser) { toast('Log in to play Battle Royale', 'error'); return; }
+      showScreen('br-queue');
+      resetBRQueueScreen();
+    });
+    $('#btn-back-from-br').addEventListener('click', function () {
+      if (socket) socket.emit('br:dequeue');
+      brInQueue = false;
+      showScreen('library');
+    });
+    $('#br-find-match').addEventListener('click', function () {
+      if (!socket) { toast('Not connected', 'error'); return; }
+      socket.emit('br:queue');
+      brInQueue = true;
+      brQueueTimerStart = Date.now();
+      $('#br-find-match').classList.add('hidden');
+      $('#br-queue-status').classList.remove('hidden');
+      // Start a local countdown display
+      updateBRQueueTimer();
+    });
+    $('#br-cancel-queue').addEventListener('click', function () {
+      if (socket) socket.emit('br:dequeue');
+      brInQueue = false;
+      resetBRQueueScreen();
+    });
+    $('#btn-back-from-br-lobby').addEventListener('click', function () {
+      if (socket && brMatchId) socket.emit('br:abandon');
+      brMatchId = null;
+      brGameMode = false;
+      showScreen('br-queue');
+      resetBRQueueScreen();
+    });
+    $('#br-song-search-btn').addEventListener('click', function () {
+      var q = $('#br-song-search').value.trim();
+      if (q) brSearchSong(q);
+    });
+    $('#br-song-search').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') {
+        var q = e.target.value.trim();
+        if (q) brSearchSong(q);
+      }
+    });
+    $('#br-play-again').addEventListener('click', function () {
+      if (!socket) { toast('Not connected', 'error'); return; }
+      showScreen('br-queue');
+      brInQueue = true;
+      brQueueTimerStart = Date.now();
+      resetBRQueueScreen();
+      $('#br-find-match').classList.add('hidden');
+      $('#br-queue-status').classList.remove('hidden');
+      socket.emit('br:queue');
+      updateBRQueueTimer();
+    });
+    $('#br-back-to-menu').addEventListener('click', function () {
+      brMatchId = null;
+      brGameMode = false;
+      showScreen('library');
+    });
   }
 
   // ─── Competitive song search ──────────────────────
@@ -1711,9 +2004,6 @@
       } else {
         clearInterval(interval);
         overlay.remove();
-        // Show opponent HUD
-        var hud = $('#comp-opponent-hud');
-        if (hud) hud.classList.add('active');
         callback();
       }
     }, 1000);

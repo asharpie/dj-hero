@@ -79,6 +79,11 @@ class DJGame {
     this.opponentCombo = 0;
     this.opponentName = '';
 
+    // Battle Royale mode
+    this.brMode = false;
+    this.brMyName = '';
+    this.brPlayers = []; // [{ username, isBot, score, combo, eliminated, keys }]
+
     this._boundKeyDown = this._handleKeyDown.bind(this);
     this._boundKeyUp = this._handleKeyUp.bind(this);
   }
@@ -116,6 +121,33 @@ class DJGame {
     if (data.keys) this.opponentKeys = data.keys;
     if (data.score !== undefined) this.opponentScore = data.score;
     if (data.combo !== undefined) this.opponentCombo = data.combo;
+  }
+
+  setBRMode(enabled, myName, players) {
+    this.brMode = enabled;
+    this.brMyName = myName || '';
+    this.brPlayers = (players || []).filter(p => p.username !== myName).map(p => ({
+      username: p.username,
+      isBot: p.isBot,
+      score: p.score || 0,
+      combo: p.combo || 0,
+      eliminated: p.eliminated || false,
+      keys: p.keys || {},
+    }));
+  }
+
+  updateBRPlayers(players) {
+    const myName = this.brMyName;
+    for (const p of players) {
+      if (p.username === myName) continue;
+      const existing = this.brPlayers.find(bp => bp.username === p.username);
+      if (existing) {
+        existing.score = p.score || 0;
+        existing.combo = p.combo || 0;
+        existing.eliminated = p.eliminated || false;
+        existing.keys = p.keys || {};
+      }
+    }
   }
 
   start() {
@@ -446,6 +478,61 @@ class DJGame {
     const laneW = Math.min(72, W * 0.08);
     const highwayW = laneW * 4;
 
+    if (this.brMode) {
+      // BR mode: center highway + 4 mini boards left, 4 mini boards right
+      // Mini boards are in 2x2 grids on each side
+      const miniScale = 0.38;
+      const miniLaneW = Math.round(laneW * miniScale);
+      const miniW = miniLaneW * 4;
+      const miniH = Math.round(H * miniScale);
+      const centerX = W / 2 - highwayW / 2;
+      // Left 2x2 grid
+      const leftMargin = Math.max(8, centerX - miniW * 2 - 24) / 2;
+      // Right 2x2 grid starts after center highway
+      const rightStart = W / 2 + highwayW / 2;
+      const miniGapX = 6;
+      const miniGapY = 6;
+      const leftGridX = leftMargin;
+      const rightGridX = rightStart + Math.max(8, (W - rightStart - miniW * 2 - miniGapX) / 2);
+      const gridTopY = Math.round((H - miniH * 2 - miniGapY) / 2);
+
+      const miniBoards = [];
+      // Left 2x2: positions [0,0], [1,0], [0,1], [1,1]
+      for (let row = 0; row < 2; row++) {
+        for (let col = 0; col < 2; col++) {
+          miniBoards.push({
+            x: leftGridX + col * (miniW + miniGapX),
+            y: gridTopY + row * (miniH + miniGapY),
+            w: miniW,
+            h: miniH,
+            laneW: miniLaneW,
+          });
+        }
+      }
+      // Right 2x2
+      for (let row = 0; row < 2; row++) {
+        for (let col = 0; col < 2; col++) {
+          miniBoards.push({
+            x: rightGridX + col * (miniW + miniGapX),
+            y: gridTopY + row * (miniH + miniGapY),
+            w: miniW,
+            h: miniH,
+            laneW: miniLaneW,
+          });
+        }
+      }
+
+      return {
+        W, H,
+        laneW,
+        highwayW,
+        hitZoneY: H * this.hitZoneYRatio,
+        highway: { x: Math.max(10, centerX), w: highwayW },
+        miniBoards,
+        miniScale,
+      };
+    }
+
     if (this.competitiveMode) {
       // Side-by-side: player on left, opponent on right
       const gap = Math.max(40, W * 0.06);
@@ -512,6 +599,11 @@ class DJGame {
     // Draw opponent highway in competitive mode
     if (this.competitiveMode && L.opponentHighway) {
       this._drawOpponentHighway(ctx, L, currentTime);
+    }
+
+    // Draw BR mini boards
+    if (this.brMode && L.miniBoards) {
+      this._drawBRMiniBoards(ctx, L, currentTime);
     }
 
     ctx.restore();
@@ -685,6 +777,128 @@ class DJGame {
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
     ctx.textBaseline = 'top';
     ctx.fillText('Score: ' + this.opponentScore.toLocaleString() + '  Combo: ' + this.opponentCombo, x + w / 2, 26);
+  }
+
+  _drawBRMiniBoards(ctx, L, currentTime) {
+    const players = this.brPlayers;
+    const boards = L.miniBoards;
+    const keys = ['d', 'f', 'j', 'k'];
+
+    for (let i = 0; i < boards.length && i < players.length; i++) {
+      const board = boards[i];
+      const player = players[i];
+      const { x, y, w, h, laneW: mLaneW } = board;
+      const mHitZoneY = y + h * this.hitZoneYRatio;
+
+      ctx.save();
+
+      // Clip to mini board area
+      ctx.beginPath();
+      ctx.rect(x, y, w, h);
+      ctx.clip();
+
+      // Background
+      if (player.eliminated) {
+        ctx.fillStyle = 'rgba(40,40,40,0.6)';
+      } else {
+        ctx.fillStyle = 'rgba(255,255,255,0.015)';
+      }
+      ctx.fillRect(x, y, w, h);
+
+      // Border
+      ctx.strokeStyle = player.eliminated ? 'rgba(255,60,90,0.3)' : 'rgba(255,255,255,0.1)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x, y, w, h);
+
+      if (!player.eliminated) {
+        // Lane dividers
+        ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+        for (let lane = 0; lane <= 4; lane++) {
+          ctx.beginPath();
+          ctx.moveTo(x + lane * mLaneW, y);
+          ctx.lineTo(x + lane * mLaneW, y + h);
+          ctx.stroke();
+        }
+
+        // Hit zone line
+        ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x, mHitZoneY);
+        ctx.lineTo(x + w, mHitZoneY);
+        ctx.stroke();
+
+        // Lane indicators
+        for (let lane = 0; lane < 4; lane++) {
+          const lx = x + lane * mLaneW + mLaneW / 2;
+          const color = this.laneColors[lane];
+          ctx.beginPath();
+          ctx.arc(lx, mHitZoneY, mLaneW * 0.3, 0, Math.PI * 2);
+          ctx.strokeStyle = color + '44';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+          if (player.keys && player.keys[keys[lane]]) {
+            ctx.fillStyle = color + '33';
+            ctx.fill();
+            ctx.strokeStyle = color;
+            ctx.stroke();
+          }
+        }
+
+        // Draw notes (scaled)
+        ctx.globalAlpha = 0.45;
+        const noteH = 8;
+        const noteMargin = 1;
+        for (const note of this.notes) {
+          if (note.missed) continue;
+          const timeDiff = note.time - currentTime;
+          const noteY = mHitZoneY - timeDiff * this.scrollSpeed * (h / L.H);
+          if (noteY < y - noteH || noteY > y + h + noteH) continue;
+          const nx = x + note.lane * mLaneW + noteMargin;
+          const nw = mLaneW - noteMargin * 2;
+          const color = this.laneColors[note.lane];
+
+          if (note.type === 'hold' && note.duration > 0) {
+            const tailEndY = mHitZoneY - (note.time + note.duration - currentTime) * this.scrollSpeed * (h / L.H);
+            ctx.fillStyle = color + '40';
+            const topY = Math.min(noteY, tailEndY);
+            const btmY = Math.max(noteY, tailEndY);
+            ctx.fillRect(nx, topY, nw, btmY - topY);
+          }
+          ctx.fillStyle = color;
+          this._roundRect(ctx, nx, noteY - noteH / 2, nw, noteH, 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      // Eliminated overlay
+      if (player.eliminated) {
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        ctx.fillRect(x, y, w, h);
+        ctx.font = 'bold 12px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = 'rgba(255,60,90,0.8)';
+        ctx.fillText('ELIMINATED', x + w / 2, y + h / 2);
+      }
+
+      ctx.restore();
+
+      // Player name above board (outside clip)
+      ctx.font = 'bold 10px -apple-system, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = player.eliminated ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.7)';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(player.username.length > 12 ? player.username.slice(0, 11) + '…' : player.username, x + w / 2, y - 2);
+
+      // Score below board
+      ctx.font = '9px monospace';
+      ctx.fillStyle = player.eliminated ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.5)';
+      ctx.textBaseline = 'top';
+      ctx.textAlign = 'center';
+      ctx.fillText((player.score || 0).toLocaleString(), x + w / 2, y + h + 2);
+    }
   }
 
   _drawNotes(ctx, L, deckLayout, notes, currentTime) {

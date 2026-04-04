@@ -1080,26 +1080,6 @@ kbd {
 .comp-opponent-live span { color: var(--cyan); font-weight: 600; }
 .lb-username-link:hover { color: var(--cyan); text-decoration: underline; }
 
-/* ═══════════════════════ COMPETITIVE OPPONENT HUD ═══════════════════════ */
-#comp-opponent-hud {
-  position: fixed;
-  top: 12px;
-  right: 16px;
-  background: rgba(0,0,0,0.85);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 12px 16px;
-  min-width: 180px;
-  z-index: 100;
-  backdrop-filter: blur(8px);
-  display: none;
-}
-#comp-opponent-hud.active { display: block; }
-.opp-hud-name { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
-.opp-hud-score { font-size: 24px; font-weight: 900; color: var(--cyan); }
-.opp-hud-combo { font-size: 13px; color: var(--text-dim); margin-top: 2px; }
-.opp-hud-combo span { color: var(--magenta); font-weight: 700; }
-
 /* ═══════════════════════ PRE-GAME SONG INTRO ═══════════════════════ */
 .song-intro-overlay {
   position: fixed;
@@ -1280,3 +1260,102 @@ kbd {
   padding: 40px 24px;
   text-align: center;
 }
+
+/* ═══════════════════════ BATTLE ROYALE ═══════════════════════ */
+.br-queue-content {
+  padding: 40px 24px;
+  max-width: 600px;
+  margin: 0 auto;
+  text-align: center;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.br-queue-info h2 { font-size: 28px; margin-bottom: 8px; }
+.br-desc { color: var(--text-dim); margin-bottom: 20px; font-size: 14px; }
+.br-queue-status { text-align: center; }
+.br-bot-timer { color: var(--text-dim); font-size: 13px; margin: 8px 0; }
+.br-lobby-content {
+  padding: 16px 24px;
+  max-width: 700px;
+  margin: 0 auto;
+  overflow-y: auto;
+  flex: 1;
+}
+.br-lobby-players {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.br-player-tag {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--text);
+}
+.br-player-tag.bot { color: var(--text-dim); font-style: italic; }
+.br-lobby-timer { text-align: center; color: var(--cyan); font-size: 16px; font-weight: 700; margin-top: 16px; }
+.br-results-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  padding: 30px 24px;
+  text-align: center;
+  overflow-y: auto;
+}
+.br-results-title { font-size: 28px; margin-bottom: 8px; }
+.br-placement { font-size: 22px; font-weight: 900; margin-bottom: 20px; }
+.br-placement.winner { color: var(--yellow); }
+.br-placement.top3 { color: var(--cyan); }
+.br-placement.eliminated { color: var(--text-dim); }
+.br-podium {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+.br-podium-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 120px;
+}
+.br-podium-crown { font-size: 28px; margin-bottom: 4px; }
+.br-podium-name { font-weight: 700; font-size: 14px; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 110px; }
+.br-podium-score { font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
+.br-podium-block {
+  width: 100%;
+  text-align: center;
+  font-weight: 900;
+  font-size: 16px;
+  border-radius: 6px 6px 0 0;
+  padding-top: 8px;
+}
+.br-podium-1 .br-podium-block { background: linear-gradient(to top, #b8860b, #ffd700); height: 100px; color: #000; }
+.br-podium-2 .br-podium-block { background: linear-gradient(to top, #606060, #c0c0c0); height: 70px; color: #000; }
+.br-podium-3 .br-podium-block { background: linear-gradient(to top, #6d3a00, #cd7f32); height: 50px; color: #000; }
+.br-podium-1 .br-podium-name { color: var(--yellow); }
+.br-podium-2 .br-podium-name { color: #c0c0c0; }
+.br-podium-3 .br-podium-name { color: #cd7f32; }
+.br-full-standings {
+  width: 100%;
+  max-width: 400px;
+  margin-bottom: 20px;
+}
+.br-standing-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.br-standing-row.eliminated { color: var(--text-dim); text-decoration: line-through; }
+.br-standing-row.self { color: var(--cyan); font-weight: 700; }
