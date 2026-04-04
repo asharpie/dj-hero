@@ -372,6 +372,9 @@ class DJGame {
     // Update audio degradation each frame
     this.audio.updateDegradation(dt);
 
+    // Beat drop logic (run before miss check so failed drops don't auto-complete notes)
+    this._updateDrop(currentTime);
+
     // Check for missed notes (skip during active beat drops and post-drop grace)
     for (const note of this.notes) {
       if (!note.hit && !note.missed && note.time < currentTime - this.windows.good) {
@@ -420,8 +423,7 @@ class DJGame {
       }
     }
 
-    // Beat drop logic
-    this._updateDrop(currentTime);
+    // (beat drop logic moved above miss check)
 
     // Update particles
     for (let i = this.particles.length - 1; i >= 0; i--) {
@@ -1361,15 +1363,36 @@ class DJGame {
               this.activeHolds[lane] = null;
             }
           }
+          // Accept already-held keys (pressed before buildStart, within early window)
+          if (this.keysDown['d']) this.dropKeysHeld.d = true;
+          if (this.keysDown['f']) this.dropKeysHeld.f = true;
+          if (this.keysDown['j']) this.dropKeysHeld.j = true;
+          if (this.keysDown['k']) this.dropKeysHeld.k = true;
         }
-        // Track each key independently — don't require simultaneous press
-        if (this.keysDown['d']) this.dropKeysHeld.d = true;
-        if (this.keysDown['f']) this.dropKeysHeld.f = true;
-        if (this.keysDown['j']) this.dropKeysHeld.j = true;
-        if (this.keysDown['k']) this.dropKeysHeld.k = true;
-        if (this.dropKeysHeld.d && this.dropKeysHeld.f &&
-            this.dropKeysHeld.j && this.dropKeysHeld.k) {
-          this.dropAllKeysHeld = true;
+
+        // Same timing window as normal notes (±windows.good around buildStart)
+        const inHitWindow = currentTime <= drop.buildStart + this.windows.good;
+
+        if (inHitWindow) {
+          // During initial hit window: accept new key presses
+          if (this.keysDown['d']) this.dropKeysHeld.d = true;
+          if (this.keysDown['f']) this.dropKeysHeld.f = true;
+          if (this.keysDown['j']) this.dropKeysHeld.j = true;
+          if (this.keysDown['k']) this.dropKeysHeld.k = true;
+          if (this.dropKeysHeld.d && this.dropKeysHeld.f &&
+              this.dropKeysHeld.j && this.dropKeysHeld.k) {
+            this.dropAllKeysHeld = true;
+          }
+        } else if (!this.dropAllKeysHeld) {
+          // Past the hit window without all 4 keys — fail immediately
+          this._dropFail(drop);
+        } else {
+          // All 4 pressed in time — verify they're still held
+          const allStillHeld = this.keysDown['d'] && this.keysDown['f'] &&
+                               this.keysDown['j'] && this.keysDown['k'];
+          if (!allStillHeld) {
+            this._dropFail(drop);
+          }
         }
       } else if (currentTime >= drop.dropTime && !drop.scored) {
         // Past the drop moment — auto-complete if keys were held
