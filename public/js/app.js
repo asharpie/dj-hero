@@ -466,7 +466,7 @@
       // Loading done — countdown
       loadingText.classList.add('hidden');
 
-      await doCountdown(countdownText, overlay);
+      await doCountdown(countdownText, overlay, song);
 
       // Start!
       audioEngine.play(0);
@@ -480,8 +480,20 @@
     }
   }
 
-  function doCountdown(textEl, overlay) {
+  function doCountdown(textEl, overlay, song) {
     return new Promise(function (resolve) {
+      // Add song info above countdown
+      var songInfoEl = null;
+      if (song) {
+        songInfoEl = document.createElement('div');
+        songInfoEl.className = 'countdown-song-info';
+        var imgHtml = song.thumbnail
+          ? '<img class="countdown-song-img" src="' + escapeHtml(song.thumbnail) + '" alt="">'
+          : '<div class="countdown-song-img-placeholder">\u266A</div>';
+        songInfoEl.innerHTML = imgHtml + '<div class="countdown-song-title">' + escapeHtml(song.title || 'Unknown') + '</div>';
+        var content = overlay.querySelector('.overlay-content');
+        if (content) content.insertBefore(songInfoEl, textEl);
+      }
       var count = 3;
       textEl.textContent = count;
       var interval = setInterval(function () {
@@ -492,6 +504,7 @@
           textEl.textContent = 'MIX!';
         } else {
           clearInterval(interval);
+          if (songInfoEl && songInfoEl.parentNode) songInfoEl.remove();
           resolve();
         }
       }, 800);
@@ -1065,10 +1078,8 @@
 
     socket.on('competitive:start', function (data) {
       compGameMode = true;
-      // Show song intro overlay before starting
-      showSongIntro(compChosenSong, compOpponentName, function() {
-        streamAndPlay(compChosenSong.videoId, compChosenSong.title, compChosenSong.thumbnail || null, compChosenSong.duration || 0);
-      });
+      // Go straight to playing (countdown is in-game)
+      streamAndPlay(compChosenSong.videoId, compChosenSong.title, compChosenSong.thumbnail || null, compChosenSong.duration || 0);
     });
 
     socket.on('competitive:opponentProgress', function (data) {
@@ -1186,12 +1197,31 @@
       });
     });
 
+    socket.on('br:songTimerStarted', function (data) {
+      if (data.deadline) {
+        var timerEl = $('#br-lobby-timer');
+        if (!timerEl) return;
+        if (brSongTimerInterval) clearInterval(brSongTimerInterval);
+        function updateBRTimer() {
+          var remaining = Math.max(0, Math.ceil((data.deadline - Date.now()) / 1000));
+          timerEl.textContent = remaining + 's to choose a song';
+          if (remaining <= 5) timerEl.className = 'br-lobby-timer urgent';
+          if (remaining <= 0) {
+            clearInterval(brSongTimerInterval);
+            brSongTimerInterval = null;
+            timerEl.textContent = 'Starting...';
+          }
+        }
+        updateBRTimer();
+        brSongTimerInterval = setInterval(updateBRTimer, 1000);
+      }
+    });
+
     socket.on('br:go', function (data) {
       brGameMode = true;
       brChosenSong = data.song;
-      showSongIntro(data.song, null, function () {
-        streamAndPlay(data.song.videoId, data.song.title, data.song.thumbnail || null, data.song.duration || 0);
-      });
+      if (brSongTimerInterval) { clearInterval(brSongTimerInterval); brSongTimerInterval = null; }
+      streamAndPlay(data.song.videoId, data.song.title, data.song.thumbnail || null, data.song.duration || 0);
     });
 
     socket.on('br:scores', function (data) {
@@ -1250,6 +1280,7 @@
       brGameMode = false;
       brMatchId = null;
       brInQueue = false;
+      if (brSongTimerInterval) { clearInterval(brSongTimerInterval); brSongTimerInterval = null; }
       if (activeSongIntro) {
         clearInterval(activeSongIntro.interval);
         if (activeSongIntro.overlay.parentNode) activeSongIntro.overlay.remove();
@@ -1264,6 +1295,7 @@
   var compChosenSong = null;
   var compOpponentName = '';
   var compSongTimerInterval = null;
+  var brSongTimerInterval = null;
   var activeSongIntro = null; // { interval, overlay } for cleanup
 
   function resetCompetitiveScreen() {

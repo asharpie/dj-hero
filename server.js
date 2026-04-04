@@ -1077,9 +1077,9 @@ const activeBRMatches = new Map();// matchId → BR match state
 const userBRMatches = new Map();  // username → matchId
 let brQueueTimer = null;
 const BR_FILL_DELAY = 60000;     // 60 seconds before filling with bots
-const BR_LOBBY_TIME = 15000;     // 15 seconds for song selection
+const BR_LOBBY_TIME = 30000;     // 30 seconds for song selection after first pick
 const BR_PLAYERS = 9;
-const BR_PLAY_DELAY = 12000;     // delay before bot scoring starts (covers client countdown)
+const BR_PLAY_DELAY = 5000;      // delay before bot scoring starts (covers client 3s countdown)
 const BR_READY_TIMEOUT = 20000;  // max wait for humans to load after song reveal
 
 const BOT_NAMES = [
@@ -1143,10 +1143,7 @@ function startBRLobby(match) {
       if (s) s.emit('br:matched', { matchId: match.matchId, players: playerList });
     }
   });
-  // Start lobby countdown — after BR_LOBBY_TIME, pick song and start
-  match.lobbyTimer = setTimeout(() => {
-    startBRGame(match);
-  }, BR_LOBBY_TIME);
+  // No automatic timer — timer starts when first player picks a song
 }
 
 function startBRGame(match) {
@@ -1707,6 +1704,28 @@ io.on('connection', (socket) => {
     const player = match.players.find(p => p.username === authedUser);
     if (!player || player.isBot) return;
     player.song = data.song;
+
+    // Start 30s timer on the first song pick
+    if (!match.lobbyTimer) {
+      const deadline = Date.now() + BR_LOBBY_TIME;
+      match.songSelectDeadline = deadline;
+      match.players.forEach(p => {
+        if (!p.isBot) {
+          const s = onlineUsers.get(p.username);
+          if (s) s.emit('br:songTimerStarted', { deadline });
+        }
+      });
+      match.lobbyTimer = setTimeout(() => {
+        startBRGame(match);
+      }, BR_LOBBY_TIME);
+    }
+
+    // If all humans have picked, start immediately
+    const allHumansPicked = match.players.every(p => p.isBot || p.song);
+    if (allHumansPicked) {
+      if (match.lobbyTimer) { clearTimeout(match.lobbyTimer); match.lobbyTimer = null; }
+      startBRGame(match);
+    }
   });
 
   socket.on('br:ready', () => {

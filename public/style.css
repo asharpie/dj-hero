@@ -484,6 +484,45 @@ kbd {
 }
 .game-overlay.hidden { display: none; }
 .overlay-content { text-align: center; }
+.countdown-song-info {
+  margin-bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  animation: fadeIn 0.5s ease;
+}
+.countdown-song-img {
+  width: 240px;
+  height: 135px;
+  object-fit: cover;
+  border-radius: 8px;
+  box-shadow: 0 0 30px rgba(0,229,255,0.3);
+}
+.countdown-song-img-placeholder {
+  width: 240px;
+  height: 135px;
+  background: var(--surface);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 48px;
+  color: var(--text-dim);
+}
+.countdown-song-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  max-width: 400px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@keyframes fadeIn {
+  0% { opacity: 0; transform: translateY(-10px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
 .countdown-text {
   font-size: 120px;
   font-weight: 900;
@@ -1401,6 +1440,7 @@ kbd {
 }
 .br-player-tag.bot { color: var(--text-dim); font-style: italic; }
 .br-lobby-timer { text-align: center; color: var(--cyan); font-size: 16px; font-weight: 700; margin-top: 16px; }
+.br-lobby-timer.urgent { color: var(--red); animation: timerPulse 0.5s ease-in-out infinite; }
 .br-results-page {
   display: flex;
   flex-direction: column;
