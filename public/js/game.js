@@ -27,8 +27,7 @@ class DJGame {
     this.dropState = 'none'; // none | building | holding | released
     this.dropHoldStart = 0;
     this.dropAllKeysHeld = false;
-
-    // Rendering
+    this.postDropGrace = 0; // grace period after drop ends
     this.scrollSpeed = 400;
     this.hitZoneYRatio = 0.82;
     this.laneColors = ['#00e5ff', '#ff00ff', '#ffea00', '#00ff88'];
@@ -243,6 +242,21 @@ class DJGame {
     const key = e.key.toLowerCase();
     this.keysDown[key] = false;
 
+    // After a drop, re-check held keys as fresh presses
+    if (this.postDropGrace > 0) {
+      const ct = this.audio.getCurrentTime();
+      if (ct < this.postDropGrace) {
+        // Simulate re-pressing all still-held keys
+        const keys = ['d', 'f', 'j', 'k'];
+        for (let lane = 0; lane < 4; lane++) {
+          if (this.keysDown[keys[lane]]) {
+            this._checkHit(lane);
+          }
+        }
+        this.postDropGrace = 0; // only trigger once
+      }
+    }
+
     const mapping = this.keyMapping[key];
     if (mapping) {
       if (this.onKeyUpdate) this.onKeyUpdate({ ...this.keysDown });
@@ -358,13 +372,14 @@ class DJGame {
     // Update audio degradation each frame
     this.audio.updateDegradation(dt);
 
-    // Check for missed notes (skip during active beat drops)
+    // Check for missed notes (skip during active beat drops and post-drop grace)
     for (const note of this.notes) {
       if (!note.hit && !note.missed && note.time < currentTime - this.windows.good) {
-        // Don't penalize misses during a beat drop
-        if (this.activeDrop && this.dropState === 'building') {
+        // Don't penalize misses during a beat drop or grace period
+        if ((this.activeDrop && this.dropState === 'building') || currentTime < this.postDropGrace) {
           note.hit = true;
           note.rating = 'good';
+          this._registerHit('good', note.lane);
           continue;
         }
         note.missed = true;
@@ -1368,6 +1383,7 @@ class DJGame {
     this.dropState = 'none';
     this.activeDrop = null;
     this.activeHolds = [null, null, null, null];
+    this.postDropGrace = currentTime + 0.4;
 
     const timingDiff = Math.abs(currentTime - drop.dropTime);
     const bonus = timingDiff < 0.05 ? 2000 : timingDiff < 0.15 ? 1000 : 500;
@@ -1425,6 +1441,7 @@ class DJGame {
     this.dropState = 'none';
     this.activeDrop = null;
     this.activeHolds = [null, null, null, null];
+    this.postDropGrace = this.audio.getCurrentTime() + 0.4;
     this.combo = 0;
     this.crowdMeter = Math.max(0, this.crowdMeter - 0.08);
     this.audio.playSFX('drop-fail');

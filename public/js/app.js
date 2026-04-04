@@ -1023,7 +1023,13 @@
       showScreen('comp-lobby');
       showLobbySection('comp-song-select');
       $('#comp-opponent-name').textContent = data.opponent;
-      // Start 30s song selection countdown
+      // Clear any old timer
+      var timerEl = $('#comp-song-timer');
+      if (timerEl) timerEl.textContent = '';
+    });
+
+    // Timer starts when the first player picks a song
+    socket.on('competitive:songTimerStarted', function (data) {
       if (data.songSelectDeadline) {
         startCompSongTimer(data.songSelectDeadline);
       }

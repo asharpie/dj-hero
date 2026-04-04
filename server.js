@@ -1076,7 +1076,7 @@ const brQueue = [];               // [{ username, socket, mmr }]
 const activeBRMatches = new Map();// matchId → BR match state
 const userBRMatches = new Map();  // username → matchId
 let brQueueTimer = null;
-const BR_FILL_DELAY = 30000;     // 30 seconds before filling with bots
+const BR_FILL_DELAY = 60000;     // 60 seconds before filling with bots
 const BR_LOBBY_TIME = 15000;     // 15 seconds for song selection
 const BR_PLAYERS = 9;
 const BR_PLAY_DELAY = 12000;     // delay before bot scoring starts (covers client countdown)
@@ -1241,7 +1241,7 @@ function simulateBotScores(match, totalNotes) {
     const misses = notesReached - perfects - greats - goods;
 
     const avgMulti = 5; // bots maintain good combos
-    p.score = Math.round((perfects * 30 + greats * 20 + goods * 10) * avgMulti);
+    p.score = Math.round((perfects * 300 + greats * 200 + goods * 100) * avgMulti);
     // Add per-bot variance ±10%
     const variance = 1 + (hashStr(p.username) % 100 - 50) / 500;
     p.score = Math.round(p.score * variance);
@@ -1463,6 +1463,41 @@ io.on('connection', (socket) => {
     const player = match.player1 === authedUser ? 'p1' : match.player2 === authedUser ? 'p2' : null;
     if (!player) return;
     match[player + 'Song'] = data.song;
+
+    // Start 30s countdown when the FIRST player picks a song
+    if (!match.songSelectTimer) {
+      const songSelectDeadline = Date.now() + COMP_SONG_SELECT_TIME;
+      match.songSelectDeadline = songSelectDeadline;
+      const s1 = onlineUsers.get(match.player1);
+      const s2 = onlineUsers.get(match.player2);
+      if (s1) s1.emit('competitive:songTimerStarted', { songSelectDeadline });
+      if (s2) s2.emit('competitive:songTimerStarted', { songSelectDeadline });
+
+      match.songSelectTimer = setTimeout(() => {
+        if (match.status !== 'songSelect') return;
+        const songs = [match.p1Song, match.p2Song].filter(Boolean);
+        if (songs.length === 0) {
+          match.status = 'finished';
+          const ss1 = onlineUsers.get(match.player1);
+          const ss2 = onlineUsers.get(match.player2);
+          if (ss1) ss1.emit('competitive:matchCancelled', { reason: 'No songs were selected in time' });
+          if (ss2) ss2.emit('competitive:matchCancelled', { reason: 'No songs were selected in time' });
+          userMatches.delete(match.player1);
+          userMatches.delete(match.player2);
+          activeMatches.delete(match.matchId);
+          return;
+        }
+        const chosen = songs[Math.floor(Math.random() * songs.length)];
+        match.chosenSong = chosen;
+        match.status = 'ready';
+        if (match.songSelectTimer) { clearTimeout(match.songSelectTimer); match.songSelectTimer = null; }
+        const ss1 = onlineUsers.get(match.player1);
+        const ss2 = onlineUsers.get(match.player2);
+        if (ss1) ss1.emit('competitive:songChosen', { matchId: match.matchId, song: chosen, allSongs: songs });
+        if (ss2) ss2.emit('competitive:songChosen', { matchId: match.matchId, song: chosen, allSongs: songs });
+      }, COMP_SONG_SELECT_TIME);
+    }
+
     if (match.p1Song && match.p2Song) {
       if (match.songSelectTimer) { clearTimeout(match.songSelectTimer); match.songSelectTimer = null; }
       const songs = [match.p1Song, match.p2Song];
@@ -1611,32 +1646,8 @@ io.on('connection', (socket) => {
     userMatches.set(data.from, matchId);
     userMatches.set(authedUser, matchId);
 
-    const songSelectDeadline = Date.now() + COMP_SONG_SELECT_TIME;
-    challengerSocket.emit('competitive:matched', { matchId, opponent: authedUser, songSelectDeadline });
-    socket.emit('competitive:matched', { matchId, opponent: data.from, songSelectDeadline });
-
-    match.songSelectTimer = setTimeout(() => {
-      if (match.status !== 'songSelect') return;
-      const songs = [match.p1Song, match.p2Song].filter(Boolean);
-      if (songs.length === 0) {
-        match.status = 'finished';
-        const s1 = onlineUsers.get(match.player1);
-        const s2 = onlineUsers.get(match.player2);
-        if (s1) s1.emit('competitive:matchCancelled', { reason: 'No songs were selected in time' });
-        if (s2) s2.emit('competitive:matchCancelled', { reason: 'No songs were selected in time' });
-        userMatches.delete(match.player1);
-        userMatches.delete(match.player2);
-        activeMatches.delete(matchId);
-        return;
-      }
-      const chosen = songs[Math.floor(Math.random() * songs.length)];
-      match.chosenSong = chosen;
-      match.status = 'ready';
-      const s1 = onlineUsers.get(match.player1);
-      const s2 = onlineUsers.get(match.player2);
-      if (s1) s1.emit('competitive:songChosen', { matchId, song: chosen, allSongs: songs });
-      if (s2) s2.emit('competitive:songChosen', { matchId, song: chosen, allSongs: songs });
-    }, COMP_SONG_SELECT_TIME);
+    challengerSocket.emit('competitive:matched', { matchId, opponent: authedUser });
+    socket.emit('competitive:matched', { matchId, opponent: data.from });
   });
 
   socket.on('challenge:decline', (data) => {
@@ -1822,35 +1833,8 @@ function tryMatchmaking() {
     userMatches.set(p1.username, matchId);
     userMatches.set(p2.username, matchId);
 
-    const songSelectDeadline = Date.now() + COMP_SONG_SELECT_TIME;
-    p1.socket.emit('competitive:matched', { matchId, opponent: p2.username, opponentMmr: p2.mmr, songSelectDeadline });
-    p2.socket.emit('competitive:matched', { matchId, opponent: p1.username, opponentMmr: p1.mmr, songSelectDeadline });
-
-    // 30s timer for song selection
-    match.songSelectTimer = setTimeout(() => {
-      if (match.status !== 'songSelect') return;
-      const songs = [match.p1Song, match.p2Song].filter(Boolean);
-      if (songs.length === 0) {
-        // Neither picked — cancel match
-        match.status = 'finished';
-        const s1 = onlineUsers.get(match.player1);
-        const s2 = onlineUsers.get(match.player2);
-        if (s1) s1.emit('competitive:matchCancelled', { reason: 'No songs were selected in time' });
-        if (s2) s2.emit('competitive:matchCancelled', { reason: 'No songs were selected in time' });
-        userMatches.delete(match.player1);
-        userMatches.delete(match.player2);
-        activeMatches.delete(matchId);
-        return;
-      }
-      // Pick from whatever's available
-      const chosen = songs[Math.floor(Math.random() * songs.length)];
-      match.chosenSong = chosen;
-      match.status = 'ready';
-      const s1 = onlineUsers.get(match.player1);
-      const s2 = onlineUsers.get(match.player2);
-      if (s1) s1.emit('competitive:songChosen', { matchId, song: chosen, allSongs: songs });
-      if (s2) s2.emit('competitive:songChosen', { matchId, song: chosen, allSongs: songs });
-    }, COMP_SONG_SELECT_TIME);
+    p1.socket.emit('competitive:matched', { matchId, opponent: p2.username, opponentMmr: p2.mmr });
+    p2.socket.emit('competitive:matched', { matchId, opponent: p1.username, opponentMmr: p1.mmr });
   }
 }
 
