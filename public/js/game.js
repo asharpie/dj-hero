@@ -1353,6 +1353,7 @@ class DJGame {
           this.dropState = 'building';
           this.activeDrop = drop;
           this.dropAllKeysHeld = false;
+          this.dropKeysHeld = { d: false, f: false, j: false, k: false };
           // Auto-complete any in-progress hold notes so they don't break combo later
           for (let lane = 0; lane < 4; lane++) {
             if (this.activeHolds[lane]) {
@@ -1361,10 +1362,15 @@ class DJGame {
             }
           }
         }
-        // Check if all 4 keys are currently held
-        const allHeldNow = this.keysDown['d'] && this.keysDown['f'] &&
-                           this.keysDown['j'] && this.keysDown['k'];
-        if (allHeldNow) this.dropAllKeysHeld = true;
+        // Track each key independently — don't require simultaneous press
+        if (this.keysDown['d']) this.dropKeysHeld.d = true;
+        if (this.keysDown['f']) this.dropKeysHeld.f = true;
+        if (this.keysDown['j']) this.dropKeysHeld.j = true;
+        if (this.keysDown['k']) this.dropKeysHeld.k = true;
+        if (this.dropKeysHeld.d && this.dropKeysHeld.f &&
+            this.dropKeysHeld.j && this.dropKeysHeld.k) {
+          this.dropAllKeysHeld = true;
+        }
       } else if (currentTime >= drop.dropTime && !drop.scored) {
         // Past the drop moment — auto-complete if keys were held
         if (this.activeDrop === drop) {
