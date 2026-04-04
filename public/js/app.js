@@ -400,6 +400,11 @@
       game = new DJGame(canvas, audioEngine);
       game.loadBeatmap(beatmap, difficulty, duration);
 
+      // Enable side-by-side view in competitive mode
+      if (compGameMode) {
+        game.setCompetitiveMode(true, compOpponentName);
+      }
+
       // Wire callbacks
       game.onScoreUpdate = function (score, combo, crowd) {
         $('#hud-score-val').textContent = score.toLocaleString();
@@ -412,6 +417,13 @@
         // Send progress to opponent in competitive mode
         if (compGameMode && currentMatchId && socket) {
           socket.emit('competitive:scoreUpdate', { matchId: currentMatchId, score: score, combo: combo });
+        }
+      };
+
+      // Send keypresses to opponent for side-by-side view
+      game.onKeyUpdate = function (keys) {
+        if (compGameMode && currentMatchId && socket) {
+          socket.emit('competitive:keyUpdate', { matchId: currentMatchId, keys: keys });
         }
       };
 
@@ -990,15 +1002,25 @@
     });
 
     socket.on('competitive:opponentProgress', function (data) {
-      // Update HUD overlay during game
+      // Feed score/combo data to game engine for side-by-side display
+      if (game && game.competitiveMode) {
+        game.updateOpponentState({ score: data.score || 0, combo: data.combo || 0 });
+      }
+      // Also update the HUD overlay as fallback
       var hud = $('#comp-opponent-hud');
-      if (hud) {
+      if (hud && !game) {
         hud.classList.add('active');
         $('#opp-hud-score').textContent = (data.score || 0).toLocaleString();
         $('#opp-hud-combo').textContent = data.combo || 0;
       }
       var el = $('#comp-opponent-live');
       if (el) el.innerHTML = 'Opponent: <span>' + (data.score || 0).toLocaleString() + '</span> pts';
+    });
+
+    socket.on('competitive:opponentKeys', function (data) {
+      if (game && game.competitiveMode) {
+        game.updateOpponentState({ keys: data.keys || {} });
+      }
     });
 
     socket.on('competitive:opponentFinished', function () {
@@ -1048,8 +1070,14 @@
     });
 
     // Opponent left match
-    socket.on('competitive:opponentLeft', function () {
-      toast('Opponent left the match', 'info');
+    socket.on('competitive:opponentLeft', function (data) {
+      var msg = (data && data.forfeited) ? (data.username || 'Opponent') + ' forfeited!' : 'Opponent left the match';
+      toast(msg, 'info');
+
+      // Stop any in-progress game
+      if (game) game.stop();
+      if (audioEngine) audioEngine.stop();
+
       currentMatchId = null;
       compGameMode = false;
       inQueue = false;
@@ -1439,6 +1467,17 @@
       if (game) game.stop();
       if (audioEngine) audioEngine.stop();
       $('#game-overlay').classList.add('hidden');
+
+      // If in competitive mode, emit abandon so opponent sees forfeit
+      if (compGameMode && currentMatchId && socket) {
+        socket.emit('competitive:abandon', { matchId: currentMatchId });
+      }
+      // Hide opponent HUD
+      var hud = $('#comp-opponent-hud');
+      if (hud) hud.classList.remove('active');
+      compGameMode = false;
+      currentMatchId = null;
+
       showScreen('library');
     });
 
@@ -1571,6 +1610,10 @@
       }
     });
     $('#comp-back-to-queue').addEventListener('click', function () {
+      compGameMode = false;
+      currentMatchId = null;
+      var hud = $('#comp-opponent-hud');
+      if (hud) hud.classList.remove('active');
       showScreen('competitive');
       inQueue = false;
       resetCompetitiveScreen();

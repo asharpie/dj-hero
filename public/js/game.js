@@ -70,6 +70,14 @@ class DJGame {
     this.onStateChange = null;
     this.onScoreUpdate = null;
     this.onGameEnd = null;
+    this.onKeyUpdate = null;
+
+    // Competitive side-by-side mode
+    this.competitiveMode = false;
+    this.opponentKeys = {};
+    this.opponentScore = 0;
+    this.opponentCombo = 0;
+    this.opponentName = '';
 
     this._boundKeyDown = this._handleKeyDown.bind(this);
     this._boundKeyUp = this._handleKeyUp.bind(this);
@@ -92,7 +100,22 @@ class DJGame {
     this.difficulty = difficulty;
     this.gameDuration = duration + leadIn;
 
-    this.scrollSpeed = { easy: 320, medium: 420, hard: 540, master: 600 }[difficulty] || 420;
+    // Base scroll speed by difficulty, scaled by BPM for speed-based difficulty
+    const baseSpeed = { easy: 320, medium: 420, hard: 540, master: 600 }[difficulty] || 420;
+    const bpm = beatmap.bpm || 120;
+    const bpmScale = 0.7 + (bpm / 120) * 0.3; // 1.0 at 120 BPM, faster songs = faster scroll
+    this.scrollSpeed = Math.round(baseSpeed * bpmScale);
+  }
+
+  setCompetitiveMode(enabled, opponentName) {
+    this.competitiveMode = enabled;
+    this.opponentName = opponentName || '';
+  }
+
+  updateOpponentState(data) {
+    if (data.keys) this.opponentKeys = data.keys;
+    if (data.score !== undefined) this.opponentScore = data.score;
+    if (data.combo !== undefined) this.opponentCombo = data.combo;
   }
 
   start() {
@@ -176,6 +199,7 @@ class DJGame {
     const mapping = this.keyMapping[key];
     if (mapping) {
       e.preventDefault();
+      if (this.onKeyUpdate) this.onKeyUpdate({ ...this.keysDown });
       // Don't trigger hit checks during beat drops (avoids mash penalty)
       if (this.activeDrop && this.dropState === 'building') return;
       this._checkHit(mapping.lane);
@@ -187,9 +211,9 @@ class DJGame {
     const key = e.key.toLowerCase();
     this.keysDown[key] = false;
 
-    // Check for hold note release
     const mapping = this.keyMapping[key];
     if (mapping) {
+      if (this.onKeyUpdate) this.onKeyUpdate({ ...this.keysDown });
       // Don't process hold releases during beat drops
       if (this.activeDrop && this.dropState === 'building') return;
 
@@ -421,8 +445,23 @@ class DJGame {
     const H = this.H;
     const laneW = Math.min(72, W * 0.08);
     const highwayW = laneW * 4;
-    const centerX = W / 2;
 
+    if (this.competitiveMode) {
+      // Side-by-side: player on left, opponent on right
+      const gap = Math.max(40, W * 0.06);
+      const playerX = W / 4 - highwayW / 2;
+      const opponentX = W * 3 / 4 - highwayW / 2;
+      return {
+        W, H,
+        laneW,
+        highwayW,
+        hitZoneY: H * this.hitZoneYRatio,
+        highway: { x: Math.max(10, playerX), w: highwayW },
+        opponentHighway: { x: Math.min(W - highwayW - 10, opponentX), w: highwayW },
+      };
+    }
+
+    const centerX = W / 2;
     return {
       W, H,
       laneW,
@@ -468,6 +507,11 @@ class DJGame {
     // Draw combo burst
     if (this.combo >= 10) {
       this._drawComboBurst(ctx, L);
+    }
+
+    // Draw opponent highway in competitive mode
+    if (this.competitiveMode && L.opponentHighway) {
+      this._drawOpponentHighway(ctx, L, currentTime);
     }
 
     ctx.restore();
@@ -557,6 +601,90 @@ class DJGame {
       ctx.fillRect(lx, hitZoneY - 30, laneW, 60);
       ctx.globalAlpha = 1;
     }
+  }
+
+  _drawOpponentHighway(ctx, L, currentTime) {
+    const deck = L.opponentHighway;
+    const { x, w } = deck;
+    const { laneW, hitZoneY, H } = L;
+    const keys = ['d', 'f', 'j', 'k'];
+
+    // Dimmed highway background
+    ctx.fillStyle = 'rgba(255,255,255,0.015)';
+    ctx.fillRect(x, 0, w, H);
+
+    // Lane dividers
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+      ctx.beginPath();
+      ctx.moveTo(x + i * laneW, 0);
+      ctx.lineTo(x + i * laneW, H);
+      ctx.stroke();
+    }
+
+    // Grid lines
+    const gridSpacing = 60;
+    const gridOffset = (currentTime * this.scrollSpeed) % gridSpacing;
+    ctx.strokeStyle = 'rgba(255,255,255,0.02)';
+    for (let y = -gridOffset; y < H; y += gridSpacing) {
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + w, y);
+      ctx.stroke();
+    }
+
+    // Hit zone line
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x, hitZoneY);
+    ctx.lineTo(x + w, hitZoneY);
+    ctx.stroke();
+
+    // Lane indicators showing opponent's keypresses
+    for (let lane = 0; lane < 4; lane++) {
+      const lx = x + lane * laneW + laneW / 2;
+      const color = this.laneColors[lane];
+
+      ctx.beginPath();
+      ctx.arc(lx, hitZoneY, laneW * 0.35, 0, Math.PI * 2);
+      ctx.strokeStyle = color + '44';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      if (this.opponentKeys[keys[lane]]) {
+        ctx.fillStyle = color + '33';
+        ctx.fill();
+        ctx.strokeStyle = color;
+        ctx.stroke();
+      }
+
+      // Key label
+      ctx.fillStyle = this.opponentKeys[keys[lane]] ? color : 'rgba(255,255,255,0.3)';
+      ctx.font = 'bold ' + Math.max(12, laneW * 0.24) + 'px -apple-system, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillText(keys[lane].toUpperCase(), lx, hitZoneY + laneW * 0.4);
+    }
+
+    // Draw notes on opponent's highway (same beatmap, dimmed)
+    ctx.globalAlpha = 0.5;
+    this._drawNotes(ctx, L, deck, this.notes, currentTime);
+    ctx.globalAlpha = 1;
+
+    // Opponent name label above highway
+    ctx.font = 'bold 14px -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(this.opponentName || 'Opponent', x + w / 2, 22);
+
+    // Opponent score/combo below name
+    ctx.font = '12px monospace';
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.textBaseline = 'top';
+    ctx.fillText('Score: ' + this.opponentScore.toLocaleString() + '  Combo: ' + this.opponentCombo, x + w / 2, 26);
   }
 
   _drawNotes(ctx, L, deckLayout, notes, currentTime) {
@@ -822,7 +950,7 @@ class DJGame {
   }
 
   _drawComboBurst(ctx, L) {
-    const cx = L.W / 2;
+    const cx = L.highway.x + L.highway.w / 2;
     const cy = L.H * 0.45;
     const t = performance.now();
 
@@ -897,7 +1025,7 @@ class DJGame {
 
         // Spawn expanding rings
         const L = this._getLayout();
-        const cx = L.W / 2;
+        const cx = L.highway.x + L.highway.w / 2;
         const cy = L.H * 0.45;
         const color = m >= 100 ? '#ff00ff' : m >= 50 ? '#00e5ff' : '#ffea00';
         for (let i = 0; i < 3; i++) {
@@ -1041,7 +1169,7 @@ class DJGame {
 
     // Spawn massive golden particle burst
     const L = this._getLayout();
-    const cx = L.W / 2;
+    const cx = L.highway.x + L.highway.w / 2;
     const cy = L.hitZoneY;
     for (let i = 0; i < 60; i++) {
       const angle = (Math.PI * 2 * i) / 60;

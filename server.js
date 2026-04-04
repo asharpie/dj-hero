@@ -1175,6 +1175,17 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('competitive:keyUpdate', (data) => {
+    if (!authedUser || !data || !data.matchId) return;
+    const match = activeMatches.get(data.matchId);
+    if (!match) return;
+    const opponent = match.player1 === authedUser ? match.player2 : match.player1;
+    const opponentSocket = onlineUsers.get(opponent);
+    if (opponentSocket) {
+      opponentSocket.emit('competitive:opponentKeys', { keys: data.keys });
+    }
+  });
+
   socket.on('competitive:finish', async (data) => {
     if (!authedUser || !data || !data.matchId) return;
     const match = activeMatches.get(data.matchId);
@@ -1288,7 +1299,7 @@ io.on('connection', (socket) => {
 
     const opponent = match.player1 === authedUser ? match.player2 : match.player1;
     const opponentSocket = onlineUsers.get(opponent);
-    if (opponentSocket) opponentSocket.emit('competitive:opponentLeft');
+    if (opponentSocket) opponentSocket.emit('competitive:opponentLeft', { forfeited: true, username: authedUser });
 
     match.status = 'finished';
     userMatches.delete(match.player1);

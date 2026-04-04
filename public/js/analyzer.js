@@ -284,7 +284,7 @@ class AudioAnalyzer {
     // Sort notes by time after modifications
     notes.sort((a, b) => a.time - b.time || a.lane - b.lane);
 
-    return { notes, drops };
+    return { notes, drops, bpm: analysis.bpm };
   }
 
   // Detect build-up → drop transitions between sections
@@ -317,39 +317,197 @@ class AudioAnalyzer {
     const beatInterval = 60 / bpm;
     const notes = [];
 
-    // Define patterns for each intensity level
-    // Hold notes appear on all difficulties with increasing frequency
-    const patterns = {
+    // ─── Speed-based difficulty scaling ────────────
+    // Faster BPM → more notes, tighter patterns (like real rhythm games)
+    const speedFactor = Math.min(2.0, Math.max(0.5, bpm / 120)); // 1.0 at 120 BPM
+    const isfast = bpm >= 140;
+    const isSlow = bpm < 90;
+
+    // ─── Massive pattern library (10x variety) ─────
+    // Each pattern is an array of { beat, lanes, hold? } entries over a 4-beat measure
+    // Patterns are grouped by intensity and difficulty
+
+    const P = {
       low: {
-        easy:   [{ beat: 0, lanes: [2] }],
-        medium: [{ beat: 0, lanes: [2], hold: 2 }, { beat: 2, lanes: [0] }],
-        hard:   [{ beat: 0, lanes: [2], hold: 1 }, { beat: 1, lanes: [1] }, { beat: 2, lanes: [0] }, { beat: 3, lanes: [1] }],
-        master: [{ beat: 0, lanes: [2, 0] }, { beat: 0.5, lanes: [1] }, { beat: 1, lanes: [3], hold: 1 }, { beat: 2, lanes: [0, 2] }, { beat: 2.5, lanes: [3] }, { beat: 3, lanes: [1] }],
+        easy: [
+          [{ beat: 0, lanes: [2] }],
+          [{ beat: 0, lanes: [0] }],
+          [{ beat: 0, lanes: [1] }],
+          [{ beat: 0, lanes: [3] }],
+          [{ beat: 2, lanes: [2] }],
+          [{ beat: 2, lanes: [0] }],
+          [{ beat: 0, lanes: [2], hold: 3 }],
+          [{ beat: 0, lanes: [0], hold: 3 }],
+          [{ beat: 0, lanes: [1] }, { beat: 2, lanes: [2] }],
+          [{ beat: 0, lanes: [3] }, { beat: 2, lanes: [1] }],
+        ],
+        medium: [
+          [{ beat: 0, lanes: [2] }, { beat: 2, lanes: [0] }],
+          [{ beat: 0, lanes: [0] }, { beat: 2, lanes: [2] }],
+          [{ beat: 0, lanes: [1] }, { beat: 2, lanes: [3] }],
+          [{ beat: 0, lanes: [3] }, { beat: 2, lanes: [1] }],
+          [{ beat: 0, lanes: [2], hold: 2 }, { beat: 2, lanes: [0] }],
+          [{ beat: 0, lanes: [0], hold: 2 }, { beat: 2, lanes: [2] }],
+          [{ beat: 0, lanes: [1], hold: 2 }, { beat: 2, lanes: [3] }],
+          [{ beat: 0, lanes: [2] }, { beat: 1, lanes: [0] }],
+          [{ beat: 0, lanes: [0] }, { beat: 1, lanes: [1] }, { beat: 3, lanes: [3] }],
+          [{ beat: 0, lanes: [3] }, { beat: 2, lanes: [2] }, { beat: 3, lanes: [1] }],
+          [{ beat: 0, lanes: [2], hold: 1 }, { beat: 2, lanes: [3], hold: 1 }],
+          [{ beat: 1, lanes: [0] }, { beat: 3, lanes: [2] }],
+        ],
+        hard: [
+          [{ beat: 0, lanes: [2] }, { beat: 1, lanes: [0] }, { beat: 2, lanes: [1] }, { beat: 3, lanes: [3] }],
+          [{ beat: 0, lanes: [0] }, { beat: 1, lanes: [2] }, { beat: 2, lanes: [3] }, { beat: 3, lanes: [1] }],
+          [{ beat: 0, lanes: [3] }, { beat: 1, lanes: [1] }, { beat: 2, lanes: [0] }, { beat: 3, lanes: [2] }],
+          [{ beat: 0, lanes: [2], hold: 1 }, { beat: 1, lanes: [1] }, { beat: 2, lanes: [0] }, { beat: 3, lanes: [3] }],
+          [{ beat: 0, lanes: [0, 2] }, { beat: 2, lanes: [1, 3] }],
+          [{ beat: 0, lanes: [1] }, { beat: 0.5, lanes: [2] }, { beat: 1, lanes: [3] }, { beat: 2, lanes: [0] }],
+          [{ beat: 0, lanes: [2], hold: 1 }, { beat: 2, lanes: [0], hold: 1 }],
+          [{ beat: 0, lanes: [0] }, { beat: 1, lanes: [3] }, { beat: 2, lanes: [2], hold: 1 }],
+          [{ beat: 0, lanes: [1, 3] }, { beat: 1, lanes: [0] }, { beat: 2, lanes: [2] }, { beat: 3, lanes: [1] }],
+          [{ beat: 0, lanes: [2] }, { beat: 1, lanes: [2] }, { beat: 2, lanes: [0] }, { beat: 3, lanes: [0] }],
+        ],
+        master: [
+          [{ beat: 0, lanes: [2, 0] }, { beat: 0.5, lanes: [1] }, { beat: 1, lanes: [3] }, { beat: 2, lanes: [0, 2] }, { beat: 2.5, lanes: [3] }, { beat: 3, lanes: [1] }],
+          [{ beat: 0, lanes: [0] }, { beat: 0.5, lanes: [2] }, { beat: 1, lanes: [1, 3] }, { beat: 1.5, lanes: [0] }, { beat: 2, lanes: [2] }, { beat: 3, lanes: [1, 3] }],
+          [{ beat: 0, lanes: [3] }, { beat: 0.5, lanes: [1] }, { beat: 1, lanes: [0] }, { beat: 1.5, lanes: [2] }, { beat: 2, lanes: [3, 1] }, { beat: 3, lanes: [0] }],
+          [{ beat: 0, lanes: [0, 2] }, { beat: 1, lanes: [1, 3], hold: 1 }, { beat: 2, lanes: [0] }, { beat: 2.5, lanes: [2] }, { beat: 3, lanes: [3] }, { beat: 3.5, lanes: [1] }],
+          [{ beat: 0, lanes: [2] }, { beat: 0.5, lanes: [0] }, { beat: 1, lanes: [3] }, { beat: 1.5, lanes: [1] }, { beat: 2, lanes: [2] }, { beat: 2.5, lanes: [0] }, { beat: 3, lanes: [3] }, { beat: 3.5, lanes: [1] }],
+          [{ beat: 0, lanes: [0, 1] }, { beat: 0.5, lanes: [2] }, { beat: 1, lanes: [3], hold: 1 }, { beat: 2, lanes: [0, 2] }, { beat: 3, lanes: [1, 3] }],
+          [{ beat: 0, lanes: [1] }, { beat: 0.5, lanes: [3] }, { beat: 1, lanes: [2, 0] }, { beat: 2, lanes: [1] }, { beat: 2.5, lanes: [3] }, { beat: 3, lanes: [0] }, { beat: 3.5, lanes: [2] }],
+          [{ beat: 0, lanes: [0, 3] }, { beat: 0.5, lanes: [1, 2] }, { beat: 1, lanes: [0] }, { beat: 1.5, lanes: [3] }, { beat: 2, lanes: [1, 2] }, { beat: 3, lanes: [0, 3] }],
+          [{ beat: 0, lanes: [2], hold: 1 }, { beat: 1, lanes: [0] }, { beat: 1.5, lanes: [3] }, { beat: 2, lanes: [1], hold: 1 }, { beat: 3, lanes: [2] }, { beat: 3.5, lanes: [0] }],
+          [{ beat: 0, lanes: [3, 1] }, { beat: 0.5, lanes: [0] }, { beat: 1, lanes: [2] }, { beat: 2, lanes: [3] }, { beat: 2.5, lanes: [1] }, { beat: 3, lanes: [0, 2] }],
+        ],
       },
       medium: {
-        easy:   [{ beat: 0, lanes: [2] }, { beat: 2, lanes: [0], hold: 2 }],
-        medium: [{ beat: 0, lanes: [2], hold: 1 }, { beat: 1, lanes: [1] }, { beat: 2, lanes: [0] }, { beat: 3, lanes: [3] }],
-        hard:   [{ beat: 0, lanes: [0, 2], hold: 1 }, { beat: 1, lanes: [1] }, { beat: 2, lanes: [0, 2] }, { beat: 3, lanes: [3] }],
-        master: [{ beat: 0, lanes: [0, 2] }, { beat: 0.5, lanes: [1] }, { beat: 1, lanes: [1, 3] }, { beat: 1.5, lanes: [0] }, { beat: 2, lanes: [0, 2], hold: 1 }, { beat: 3, lanes: [1, 3] }, { beat: 3.5, lanes: [0] }],
+        easy: [
+          [{ beat: 0, lanes: [2] }, { beat: 2, lanes: [0] }],
+          [{ beat: 0, lanes: [0] }, { beat: 2, lanes: [2] }],
+          [{ beat: 0, lanes: [1] }, { beat: 2, lanes: [3] }],
+          [{ beat: 0, lanes: [3] }, { beat: 2, lanes: [1] }],
+          [{ beat: 0, lanes: [2], hold: 2 }],
+          [{ beat: 0, lanes: [0], hold: 2 }],
+          [{ beat: 0, lanes: [0] }, { beat: 2, lanes: [0] }],
+          [{ beat: 0, lanes: [2] }, { beat: 2, lanes: [3] }],
+          [{ beat: 0, lanes: [1], hold: 3 }],
+          [{ beat: 0, lanes: [2] }, { beat: 1, lanes: [0] }],
+        ],
+        medium: [
+          [{ beat: 0, lanes: [2] }, { beat: 1, lanes: [0] }, { beat: 2, lanes: [1] }, { beat: 3, lanes: [3] }],
+          [{ beat: 0, lanes: [0] }, { beat: 1, lanes: [1] }, { beat: 2, lanes: [2] }, { beat: 3, lanes: [3] }],
+          [{ beat: 0, lanes: [3] }, { beat: 1, lanes: [2] }, { beat: 2, lanes: [1] }, { beat: 3, lanes: [0] }],
+          [{ beat: 0, lanes: [2], hold: 1 }, { beat: 1, lanes: [1] }, { beat: 2, lanes: [0] }, { beat: 3, lanes: [3] }],
+          [{ beat: 0, lanes: [0, 2] }, { beat: 2, lanes: [1, 3] }],
+          [{ beat: 0, lanes: [1, 3] }, { beat: 2, lanes: [0, 2] }],
+          [{ beat: 0, lanes: [0] }, { beat: 1, lanes: [2] }, { beat: 2, lanes: [0], hold: 1 }],
+          [{ beat: 0, lanes: [2] }, { beat: 1, lanes: [1] }, { beat: 3, lanes: [3] }],
+          [{ beat: 0, lanes: [0, 2] }, { beat: 1, lanes: [3] }, { beat: 2, lanes: [1] }, { beat: 3, lanes: [0] }],
+          [{ beat: 0, lanes: [3] }, { beat: 1, lanes: [1] }, { beat: 2, lanes: [3] }, { beat: 3, lanes: [2] }],
+          [{ beat: 0, lanes: [2], hold: 1 }, { beat: 2, lanes: [0], hold: 1 }],
+          [{ beat: 0, lanes: [1] }, { beat: 1, lanes: [0] }, { beat: 2, lanes: [3] }, { beat: 3, lanes: [2] }],
+        ],
+        hard: [
+          [{ beat: 0, lanes: [0, 2] }, { beat: 1, lanes: [1, 3] }, { beat: 2, lanes: [0, 2] }, { beat: 3, lanes: [1, 3] }],
+          [{ beat: 0, lanes: [0, 2], hold: 1 }, { beat: 1, lanes: [1] }, { beat: 2, lanes: [0, 2] }, { beat: 3, lanes: [3] }],
+          [{ beat: 0, lanes: [3] }, { beat: 0.5, lanes: [2] }, { beat: 1, lanes: [1] }, { beat: 1.5, lanes: [0] }, { beat: 2, lanes: [1, 3] }],
+          [{ beat: 0, lanes: [0] }, { beat: 0.5, lanes: [1] }, { beat: 1, lanes: [2] }, { beat: 1.5, lanes: [3] }, { beat: 2, lanes: [0, 2] }],
+          [{ beat: 0, lanes: [1, 2] }, { beat: 1, lanes: [0, 3] }, { beat: 2, lanes: [1, 2] }, { beat: 3, lanes: [0] }],
+          [{ beat: 0, lanes: [0, 2], hold: 1 }, { beat: 2, lanes: [1, 3], hold: 1 }],
+          [{ beat: 0, lanes: [2] }, { beat: 0.5, lanes: [0] }, { beat: 1, lanes: [3] }, { beat: 2, lanes: [1, 2] }, { beat: 3, lanes: [0, 3] }],
+          [{ beat: 0, lanes: [0] }, { beat: 1, lanes: [1] }, { beat: 1.5, lanes: [2] }, { beat: 2, lanes: [3] }, { beat: 3, lanes: [0, 2] }],
+          [{ beat: 0, lanes: [3, 1] }, { beat: 1, lanes: [0] }, { beat: 2, lanes: [2, 3] }, { beat: 3, lanes: [1], hold: 1 }],
+          [{ beat: 0, lanes: [0] }, { beat: 0.5, lanes: [2] }, { beat: 1, lanes: [1, 3] }, { beat: 2, lanes: [0] }, { beat: 2.5, lanes: [2] }, { beat: 3, lanes: [3] }],
+        ],
+        master: [
+          [{ beat: 0, lanes: [0, 2] }, { beat: 0.5, lanes: [1] }, { beat: 1, lanes: [1, 3] }, { beat: 1.5, lanes: [0] }, { beat: 2, lanes: [0, 2], hold: 1 }, { beat: 3, lanes: [1, 3] }, { beat: 3.5, lanes: [0] }],
+          [{ beat: 0, lanes: [3] }, { beat: 0.5, lanes: [2] }, { beat: 1, lanes: [1] }, { beat: 1.5, lanes: [0] }, { beat: 2, lanes: [3] }, { beat: 2.5, lanes: [2] }, { beat: 3, lanes: [1] }, { beat: 3.5, lanes: [0] }],
+          [{ beat: 0, lanes: [0, 1] }, { beat: 0.5, lanes: [2, 3] }, { beat: 1, lanes: [0, 1] }, { beat: 1.5, lanes: [2, 3] }, { beat: 2, lanes: [0, 1] }, { beat: 2.5, lanes: [2, 3] }, { beat: 3, lanes: [0, 1] }, { beat: 3.5, lanes: [2, 3] }],
+          [{ beat: 0, lanes: [0, 3] }, { beat: 0.5, lanes: [1, 2] }, { beat: 1, lanes: [0] }, { beat: 1.5, lanes: [3] }, { beat: 2, lanes: [1, 2] }, { beat: 2.5, lanes: [0] }, { beat: 3, lanes: [0, 3], hold: 0.5 }],
+          [{ beat: 0, lanes: [2] }, { beat: 0.5, lanes: [0] }, { beat: 1, lanes: [3], hold: 1 }, { beat: 2, lanes: [1] }, { beat: 2.5, lanes: [2] }, { beat: 3, lanes: [0, 3] }, { beat: 3.5, lanes: [1] }],
+          [{ beat: 0, lanes: [1, 3] }, { beat: 0.5, lanes: [0, 2] }, { beat: 1, lanes: [1] }, { beat: 1.5, lanes: [3] }, { beat: 2, lanes: [0, 2] }, { beat: 2.5, lanes: [1, 3] }, { beat: 3, lanes: [0] }, { beat: 3.5, lanes: [2] }],
+          [{ beat: 0, lanes: [0], hold: 0.5 }, { beat: 0.5, lanes: [1], hold: 0.5 }, { beat: 1, lanes: [2], hold: 0.5 }, { beat: 1.5, lanes: [3], hold: 0.5 }, { beat: 2, lanes: [0, 2] }, { beat: 2.5, lanes: [1, 3] }, { beat: 3, lanes: [0, 1, 2, 3] }],
+          [{ beat: 0, lanes: [2, 3] }, { beat: 0.5, lanes: [0, 1] }, { beat: 1, lanes: [2] }, { beat: 1.5, lanes: [0] }, { beat: 2, lanes: [1, 3] }, { beat: 2.5, lanes: [0, 2] }, { beat: 3, lanes: [3] }, { beat: 3.5, lanes: [1] }],
+          [{ beat: 0, lanes: [0] }, { beat: 0.5, lanes: [1] }, { beat: 1, lanes: [2] }, { beat: 1.5, lanes: [3] }, { beat: 2, lanes: [3] }, { beat: 2.5, lanes: [2] }, { beat: 3, lanes: [1] }, { beat: 3.5, lanes: [0] }],
+          [{ beat: 0, lanes: [0, 1, 2] }, { beat: 1, lanes: [3] }, { beat: 1.5, lanes: [2] }, { beat: 2, lanes: [1, 3] }, { beat: 2.5, lanes: [0] }, { beat: 3, lanes: [2, 3] }, { beat: 3.5, lanes: [0, 1] }],
+        ],
       },
       high: {
-        easy:   [{ beat: 0, lanes: [2], hold: 2 }, { beat: 2, lanes: [0] }, { beat: 3, lanes: [3] }],
-        medium: [{ beat: 0, lanes: [0, 2], hold: 1 }, { beat: 1, lanes: [1] }, { beat: 2, lanes: [0, 2] }, { beat: 3, lanes: [1, 3] }],
-        hard:   [{ beat: 0, lanes: [0, 2], hold: 1 }, { beat: 1, lanes: [1, 3] }, { beat: 2, lanes: [0, 2] }, { beat: 3, lanes: [1, 3], hold: 1 }],
-        master: [{ beat: 0, lanes: [0, 2] }, { beat: 0.5, lanes: [1, 3] }, { beat: 1, lanes: [0, 2], hold: 1 }, { beat: 2, lanes: [1, 3] }, { beat: 2.5, lanes: [0, 2] }, { beat: 3, lanes: [1, 3] }, { beat: 3.5, lanes: [0] }],
+        easy: [
+          [{ beat: 0, lanes: [2] }, { beat: 2, lanes: [0] }],
+          [{ beat: 0, lanes: [0] }, { beat: 2, lanes: [2] }],
+          [{ beat: 0, lanes: [2], hold: 2 }, { beat: 2, lanes: [0] }],
+          [{ beat: 0, lanes: [2] }, { beat: 2, lanes: [3] }],
+          [{ beat: 0, lanes: [0] }, { beat: 2, lanes: [1] }],
+          [{ beat: 0, lanes: [2] }, { beat: 1, lanes: [0] }, { beat: 2, lanes: [3] }],
+          [{ beat: 0, lanes: [1] }, { beat: 2, lanes: [3] }],
+          [{ beat: 0, lanes: [3] }, { beat: 2, lanes: [0] }],
+          [{ beat: 0, lanes: [0], hold: 2 }, { beat: 2, lanes: [3] }],
+          [{ beat: 0, lanes: [2] }, { beat: 1, lanes: [1] }, { beat: 3, lanes: [3] }],
+        ],
+        medium: [
+          [{ beat: 0, lanes: [0, 2] }, { beat: 1, lanes: [1] }, { beat: 2, lanes: [0, 2] }, { beat: 3, lanes: [3] }],
+          [{ beat: 0, lanes: [1, 3] }, { beat: 1, lanes: [0] }, { beat: 2, lanes: [1, 3] }, { beat: 3, lanes: [2] }],
+          [{ beat: 0, lanes: [0, 2], hold: 1 }, { beat: 1, lanes: [1] }, { beat: 2, lanes: [0, 2] }, { beat: 3, lanes: [1, 3] }],
+          [{ beat: 0, lanes: [2] }, { beat: 0.5, lanes: [0] }, { beat: 1, lanes: [3] }, { beat: 2, lanes: [1, 2] }],
+          [{ beat: 0, lanes: [0] }, { beat: 1, lanes: [2] }, { beat: 2, lanes: [1, 3] }, { beat: 3, lanes: [0] }],
+          [{ beat: 0, lanes: [3, 1] }, { beat: 1, lanes: [0] }, { beat: 2, lanes: [2, 3] }, { beat: 3, lanes: [1] }],
+          [{ beat: 0, lanes: [0, 2] }, { beat: 2, lanes: [1, 3] }, { beat: 3, lanes: [0] }],
+          [{ beat: 0, lanes: [2] }, { beat: 1, lanes: [0, 3] }, { beat: 2, lanes: [1] }, { beat: 3, lanes: [2, 3] }],
+          [{ beat: 0, lanes: [0, 1] }, { beat: 1, lanes: [2] }, { beat: 2, lanes: [3] }, { beat: 3, lanes: [0, 1] }],
+          [{ beat: 0, lanes: [1] }, { beat: 1, lanes: [3] }, { beat: 2, lanes: [0, 2] }, { beat: 3, lanes: [3, 1] }],
+          [{ beat: 0, lanes: [2], hold: 1 }, { beat: 1, lanes: [0] }, { beat: 2, lanes: [3], hold: 1 }, { beat: 3, lanes: [1] }],
+          [{ beat: 0, lanes: [0] }, { beat: 0.5, lanes: [2] }, { beat: 1, lanes: [1, 3] }, { beat: 2, lanes: [0] }, { beat: 3, lanes: [2] }],
+        ],
+        hard: [
+          [{ beat: 0, lanes: [0, 2] }, { beat: 0.5, lanes: [1] }, { beat: 1, lanes: [1, 3] }, { beat: 2, lanes: [0, 2] }, { beat: 3, lanes: [1, 3] }],
+          [{ beat: 0, lanes: [0, 2], hold: 1 }, { beat: 1, lanes: [1, 3] }, { beat: 2, lanes: [0, 2] }, { beat: 3, lanes: [1, 3], hold: 1 }],
+          [{ beat: 0, lanes: [3] }, { beat: 0.5, lanes: [2] }, { beat: 1, lanes: [1] }, { beat: 1.5, lanes: [0] }, { beat: 2, lanes: [3] }, { beat: 2.5, lanes: [2] }, { beat: 3, lanes: [1] }],
+          [{ beat: 0, lanes: [0, 1] }, { beat: 1, lanes: [2, 3] }, { beat: 2, lanes: [0, 1] }, { beat: 2.5, lanes: [3] }, { beat: 3, lanes: [2] }],
+          [{ beat: 0, lanes: [0] }, { beat: 0.5, lanes: [1] }, { beat: 1, lanes: [2, 3] }, { beat: 2, lanes: [0, 1] }, { beat: 2.5, lanes: [2] }, { beat: 3, lanes: [3, 0] }],
+          [{ beat: 0, lanes: [1, 3] }, { beat: 0.5, lanes: [0] }, { beat: 1, lanes: [2] }, { beat: 1.5, lanes: [3] }, { beat: 2, lanes: [0, 1] }, { beat: 3, lanes: [2, 3] }],
+          [{ beat: 0, lanes: [0, 2], hold: 1 }, { beat: 1, lanes: [1] }, { beat: 1.5, lanes: [3] }, { beat: 2, lanes: [0, 2] }, { beat: 3, lanes: [1, 3] }],
+          [{ beat: 0, lanes: [2, 3] }, { beat: 0.5, lanes: [0, 1] }, { beat: 1, lanes: [2] }, { beat: 2, lanes: [0, 3] }, { beat: 3, lanes: [1, 2] }],
+          [{ beat: 0, lanes: [0] }, { beat: 0.5, lanes: [2] }, { beat: 1, lanes: [1] }, { beat: 1.5, lanes: [3] }, { beat: 2, lanes: [0, 2] }, { beat: 3, lanes: [1, 3] }],
+          [{ beat: 0, lanes: [1, 2, 3] }, { beat: 1, lanes: [0] }, { beat: 2, lanes: [1, 2] }, { beat: 2.5, lanes: [3] }, { beat: 3, lanes: [0, 1] }],
+        ],
+        master: [
+          [{ beat: 0, lanes: [0, 2] }, { beat: 0.5, lanes: [1, 3] }, { beat: 1, lanes: [0, 2], hold: 1 }, { beat: 2, lanes: [1, 3] }, { beat: 2.5, lanes: [0, 2] }, { beat: 3, lanes: [1, 3] }, { beat: 3.5, lanes: [0] }],
+          [{ beat: 0, lanes: [0] }, { beat: 0.5, lanes: [1] }, { beat: 1, lanes: [2] }, { beat: 1.5, lanes: [3] }, { beat: 2, lanes: [0] }, { beat: 2.5, lanes: [1] }, { beat: 3, lanes: [2] }, { beat: 3.5, lanes: [3] }],
+          [{ beat: 0, lanes: [0, 1, 2, 3] }, { beat: 1, lanes: [0, 2] }, { beat: 1.5, lanes: [1, 3] }, { beat: 2, lanes: [0, 1, 2, 3] }, { beat: 3, lanes: [0] }, { beat: 3.5, lanes: [2] }],
+          [{ beat: 0, lanes: [3, 2] }, { beat: 0.5, lanes: [1, 0] }, { beat: 1, lanes: [3] }, { beat: 1.5, lanes: [2] }, { beat: 2, lanes: [1] }, { beat: 2.5, lanes: [0] }, { beat: 3, lanes: [3, 2] }, { beat: 3.5, lanes: [1, 0] }],
+          [{ beat: 0, lanes: [0, 3], hold: 0.5 }, { beat: 0.5, lanes: [1, 2], hold: 0.5 }, { beat: 1, lanes: [0, 3] }, { beat: 1.5, lanes: [1, 2] }, { beat: 2, lanes: [0, 1, 2, 3] }, { beat: 3, lanes: [0, 2] }, { beat: 3.5, lanes: [1, 3] }],
+          [{ beat: 0, lanes: [0] }, { beat: 0.5, lanes: [3] }, { beat: 1, lanes: [1, 2] }, { beat: 1.5, lanes: [0, 3] }, { beat: 2, lanes: [1] }, { beat: 2.5, lanes: [2] }, { beat: 3, lanes: [0, 3] }, { beat: 3.5, lanes: [1, 2] }],
+          [{ beat: 0, lanes: [2, 3] }, { beat: 0.5, lanes: [0, 1] }, { beat: 1, lanes: [2, 3] }, { beat: 1.5, lanes: [0, 1] }, { beat: 2, lanes: [0, 2], hold: 1 }, { beat: 3, lanes: [1, 3] }, { beat: 3.5, lanes: [0] }],
+          [{ beat: 0, lanes: [0, 1] }, { beat: 0.5, lanes: [2] }, { beat: 1, lanes: [3] }, { beat: 1.5, lanes: [0] }, { beat: 2, lanes: [1, 2] }, { beat: 2.5, lanes: [3, 0] }, { beat: 3, lanes: [1] }, { beat: 3.5, lanes: [2, 3] }],
+          [{ beat: 0, lanes: [0] }, { beat: 0.5, lanes: [2] }, { beat: 1, lanes: [0, 3] }, { beat: 1.5, lanes: [1, 2] }, { beat: 2, lanes: [3] }, { beat: 2.5, lanes: [1] }, { beat: 3, lanes: [0, 2] }, { beat: 3.5, lanes: [1, 3] }],
+          [{ beat: 0, lanes: [0, 1, 2] }, { beat: 0.5, lanes: [3] }, { beat: 1, lanes: [0] }, { beat: 1.5, lanes: [1, 2] }, { beat: 2, lanes: [3, 0] }, { beat: 2.5, lanes: [1] }, { beat: 3, lanes: [2, 3] }, { beat: 3.5, lanes: [0, 1] }],
+        ],
       },
     };
 
-    // Variation patterns to avoid monotony
-    const variations = [
-      lanes => lanes,
-      lanes => lanes.map(l => (l + 1) % 4),
-      lanes => lanes.length > 1 ? [lanes[0]] : lanes,
-      lanes => [3],
+    // ─── Lane transformation functions for even more variety ───
+    const transforms = [
+      function identity(lanes) { return lanes; },
+      function mirror(lanes) { return lanes.map(function(l) { return 3 - l; }); },
+      function shiftRight(lanes) { return lanes.map(function(l) { return (l + 1) % 4; }); },
+      function shiftLeft(lanes) { return lanes.map(function(l) { return (l + 3) % 4; }); },
+      function shiftTwo(lanes) { return lanes.map(function(l) { return (l + 2) % 4; }); },
+      function swap(lanes) { return lanes.map(function(l) { return l < 2 ? l + 2 : l - 2; }); },
+      function invert(lanes) { return lanes.map(function(l) { return [1, 0, 3, 2][l]; }); },
     ];
+
+    // Seeded pseudo-random for consistent per-song patterns
+    let seed = Math.floor(bpm * 1000) + beats.length;
+    function seededRandom() {
+      seed = (seed * 1664525 + 1013904223) & 0x7FFFFFFF;
+      return seed / 0x7FFFFFFF;
+    }
 
     let sectionIdx = 0;
     let measureCount = 0;
+    let lastPatternIdx = -1;
+    let lastTransformIdx = -1;
 
     for (let i = 0; i < beats.length; i++) {
       const beatTime = beats[i];
@@ -366,35 +524,57 @@ class AudioAnalyzer {
       const beatInMeasure = beatInSection % 4;
       if (beatInMeasure === 0) measureCount++;
 
-      // Get pattern for current intensity and difficulty
-      const pattern = patterns[section.intensity]?.[difficulty] || patterns.medium.medium;
+      // Get available patterns for current intensity and difficulty
+      const patternPool = P[section.intensity] && P[section.intensity][difficulty]
+        ? P[section.intensity][difficulty]
+        : P.medium.medium;
 
-      // Apply variation every 4 measures
-      const varIdx = Math.floor(measureCount / 4) % variations.length;
+      // Pick a pattern at the start of each measure, avoiding immediate repeats
+      if (beatInMeasure === 0) {
+        let attempts = 0;
+        let idx;
+        do {
+          idx = Math.floor(seededRandom() * patternPool.length);
+          attempts++;
+        } while (idx === lastPatternIdx && attempts < 5 && patternPool.length > 1);
+        lastPatternIdx = idx;
 
-      // Find all entries matching this beat (including sub-beats like 0.5)
-      // For sub-beats on master, generate notes at half-beat positions
-      const matchingEntries = pattern.filter(p => {
-        if (Number.isInteger(p.beat)) return p.beat === beatInMeasure;
-        // Sub-beat: only on master, skip (handled below)
-        return false;
-      });
+        // Pick a transform, avoiding immediate repeats
+        attempts = 0;
+        let tIdx;
+        do {
+          tIdx = Math.floor(seededRandom() * transforms.length);
+          attempts++;
+        } while (tIdx === lastTransformIdx && attempts < 5);
+        lastTransformIdx = tIdx;
+      }
 
-      // Also check if the NEXT half-beat has sub-beat entries
-      // We generate sub-beat notes offset by half a beat interval
-      const subBeatEntries = pattern.filter(p => !Number.isInteger(p.beat) && Math.floor(p.beat) === beatInMeasure);
-      for (const subEntry of subBeatEntries) {
-        const subOffset = (subEntry.beat - Math.floor(subEntry.beat)) * beatInterval;
-        const subTime = beatTime + subOffset;
-        let subLanes = subEntry.lanes;
-        if (measureCount % 8 >= 4) {
-          subLanes = variations[varIdx](subLanes);
+      const pattern = patternPool[lastPatternIdx] || patternPool[0];
+      const transform = transforms[lastTransformIdx] || transforms[0];
+
+      // Find entries matching this beat position (integer part)
+      for (const entry of pattern) {
+        const entryBeatBase = Math.floor(entry.beat);
+        const entrySubBeat = entry.beat - entryBeatBase;
+
+        if (entryBeatBase !== beatInMeasure) continue;
+
+        const subOffset = entrySubBeat * beatInterval;
+        const noteTime = beatTime + subOffset;
+
+        // For fast songs (high BPM), skip some sub-beat notes on lower difficulties
+        if (isfast && entrySubBeat > 0) {
+          if (difficulty === 'easy') continue;
+          if (difficulty === 'medium' && seededRandom() < 0.4) continue;
         }
-        for (const lane of subLanes) {
-          const noteType = (subEntry.hold && subEntry.hold > 0) ? 'hold' : 'tap';
-          const duration = noteType === 'hold' ? (beatInterval * subEntry.hold) : 0;
+
+        const computedLanes = transform(entry.lanes);
+
+        for (const lane of computedLanes) {
+          const noteType = (entry.hold && entry.hold > 0) ? 'hold' : 'tap';
+          const duration = noteType === 'hold' ? (beatInterval * entry.hold) : 0;
           notes.push({
-            time: subTime,
+            time: noteTime,
             lane: lane % 4,
             type: noteType,
             duration: duration,
@@ -405,57 +585,74 @@ class AudioAnalyzer {
           });
         }
       }
+    }
 
-      if (matchingEntries.length === 0) continue;
-      const entry = matchingEntries[0];
-
-      let lanes = entry.lanes;
-      if (measureCount % 8 >= 4) {
-        lanes = variations[varIdx](lanes);
-      }
-
-      for (const lane of lanes) {
-        const noteType = (entry.hold && entry.hold > 0) ? 'hold' : 'tap';
-        const duration = noteType === 'hold' ? (beatInterval * entry.hold) : 0;
-        notes.push({
-          time: beatTime,
-          lane: lane % 4,
-          type: noteType,
-          duration: duration,
-          hit: false,
-          missed: false,
-          rating: null,
-          holdCompleted: false,
-        });
+    // For fast songs, add extra 8th/16th note fills in high intensity sections
+    if (isfast && (difficulty === 'hard' || difficulty === 'master')) {
+      for (let s = 0; s < sections.length; s++) {
+        if (sections[s].intensity !== 'high') continue;
+        const startBeat = sections[s].startBeat;
+        const endBeat = sections[s].endBeat;
+        for (let b = startBeat; b <= endBeat; b++) {
+          if (b >= beats.length) break;
+          // Add 8th note fills between beats
+          const fillTime = beats[b] + beatInterval * 0.5;
+          if (seededRandom() < (difficulty === 'master' ? 0.5 : 0.3)) {
+            const fillLane = Math.floor(seededRandom() * 4);
+            // Check no note already exists nearby
+            const tooClose = notes.some(function(n) { return Math.abs(n.time - fillTime) < beatInterval * 0.2 && n.lane === fillLane; });
+            if (!tooClose) {
+              notes.push({
+                time: fillTime,
+                lane: fillLane,
+                type: 'tap',
+                duration: 0,
+                hit: false,
+                missed: false,
+                rating: null,
+                holdCompleted: false,
+              });
+            }
+          }
+        }
       }
     }
 
     // Post-process: ensure minimum gap between consecutive hold notes on the same lane
-    const minHoldGap = beatInterval * 0.6; // at least 60% of a beat gap
+    notes.sort(function(a, b) { return a.time - b.time || a.lane - b.lane; });
+    const minHoldGap = beatInterval * 0.6;
     for (let i = 0; i < notes.length; i++) {
       const n = notes[i];
       if (n.type !== 'hold' || n.duration <= 0) continue;
       const holdEnd = n.time + n.duration;
-      // Find next note in the same lane
       for (let j = i + 1; j < notes.length; j++) {
         if (notes[j].lane !== n.lane) continue;
         const gap = notes[j].time - holdEnd;
         if (gap < minHoldGap) {
-          // Shorten this hold so there's enough gap
           const newDuration = notes[j].time - n.time - minHoldGap;
           if (newDuration < beatInterval * 0.3) {
-            // Too short to be a hold, convert to tap
             n.type = 'tap';
             n.duration = 0;
           } else {
             n.duration = newDuration;
           }
         }
-        break; // only check the immediate next note in this lane
+        break;
       }
     }
 
-    return notes;
+    // Remove duplicate notes (same time + lane)
+    const seen = new Set();
+    const deduped = [];
+    for (const n of notes) {
+      const key = n.time.toFixed(3) + ':' + n.lane;
+      if (!seen.has(key)) {
+        seen.add(key);
+        deduped.push(n);
+      }
+    }
+
+    return deduped;
   }
 }
 
