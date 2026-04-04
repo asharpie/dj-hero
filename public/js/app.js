@@ -1018,18 +1018,43 @@
       $('#comp-song-results').innerHTML = '';
       $('#comp-song-search').value = '';
       $('#comp-song-waiting').classList.add('hidden');
-      $('#comp-ready-btn').classList.remove('hidden');
+      $('#comp-ready-btn').classList.add('hidden');
       $('#comp-ready-waiting').classList.add('hidden');
       showScreen('comp-lobby');
       showLobbySection('comp-song-select');
       $('#comp-opponent-name').textContent = data.opponent;
+      // Start 30s song selection countdown
+      if (data.songSelectDeadline) {
+        startCompSongTimer(data.songSelectDeadline);
+      }
     });
 
     socket.on('competitive:songChosen', function (data) {
-      showLobbySection('comp-ready');
-      $('#comp-chosen-song').textContent = data.song.title;
       currentMatchId = data.matchId;
       compChosenSong = data.song;
+      // Clear song timer
+      if (compSongTimerInterval) { clearInterval(compSongTimerInterval); compSongTimerInterval = null; }
+      // Show slot machine animation then auto-ready
+      showSlotMachine(data.allSongs || [data.song], data.song, function () {
+        showLobbySection('comp-ready');
+        $('#comp-chosen-song').textContent = data.song.title;
+        $('#comp-ready-btn').classList.add('hidden');
+        $('#comp-ready-waiting').classList.remove('hidden');
+        // Auto-ready
+        if (socket && currentMatchId) {
+          socket.emit('competitive:ready', { matchId: currentMatchId });
+        }
+      });
+    });
+
+    socket.on('competitive:matchCancelled', function (data) {
+      if (compSongTimerInterval) { clearInterval(compSongTimerInterval); compSongTimerInterval = null; }
+      currentMatchId = null;
+      compGameMode = false;
+      toast(data.reason || 'Match cancelled', 'error');
+      showScreen('competitive');
+      resetCompetitiveScreen();
+      loadRankings();
     });
 
     socket.on('competitive:start', function (data) {
@@ -1106,6 +1131,14 @@
       var msg = (data && data.forfeited) ? (data.username || 'Opponent') + ' forfeited!' : 'Opponent left the match';
       toast(msg, 'info');
 
+      // Clean up any active overlays
+      if (activeSongIntro) {
+        clearInterval(activeSongIntro.interval);
+        if (activeSongIntro.overlay.parentNode) activeSongIntro.overlay.remove();
+        activeSongIntro = null;
+      }
+      if (compSongTimerInterval) { clearInterval(compSongTimerInterval); compSongTimerInterval = null; }
+
       // Stop any in-progress game
       if (game) game.stop();
       if (audioEngine) audioEngine.stop();
@@ -1135,7 +1168,19 @@
       $('#br-song-picked').classList.add('hidden');
     });
 
-    socket.on('br:start', function (data) {
+    socket.on('br:songChosen', function (data) {
+      brChosenSong = data.song;
+      // Show slot machine animation, then signal ready
+      showSlotMachine(data.allSongs || [data.song], data.song, function () {
+        // Notify server we're ready to play
+        if (socket) socket.emit('br:ready');
+        // Show waiting state in lobby
+        var timerEl = $('#br-lobby-timer');
+        if (timerEl) timerEl.textContent = 'Loading...';
+      });
+    });
+
+    socket.on('br:go', function (data) {
       brGameMode = true;
       brChosenSong = data.song;
       showSongIntro(data.song, null, function () {
@@ -1182,6 +1227,12 @@
 
     socket.on('br:results', function (data) {
       brGameMode = false;
+      // Clean up any active overlays
+      if (activeSongIntro) {
+        clearInterval(activeSongIntro.interval);
+        if (activeSongIntro.overlay.parentNode) activeSongIntro.overlay.remove();
+        activeSongIntro = null;
+      }
       if (game) game.stop();
       if (audioEngine) audioEngine.stop();
       showScreen('br-results');
@@ -1193,6 +1244,11 @@
       brGameMode = false;
       brMatchId = null;
       brInQueue = false;
+      if (activeSongIntro) {
+        clearInterval(activeSongIntro.interval);
+        if (activeSongIntro.overlay.parentNode) activeSongIntro.overlay.remove();
+        activeSongIntro = null;
+      }
       toast(data.reason || 'Match cancelled', 'error');
       showScreen('br-queue');
       resetBRQueueScreen();
@@ -1201,6 +1257,8 @@
 
   var compChosenSong = null;
   var compOpponentName = '';
+  var compSongTimerInterval = null;
+  var activeSongIntro = null; // { interval, overlay } for cleanup
 
   function resetCompetitiveScreen() {
     if (!inQueue) {
@@ -1838,6 +1896,7 @@
       }
     });
     $('#comp-ready-btn').addEventListener('click', function () {
+      // Manual ready fallback (auto-ready normally handles this)
       if (socket && currentMatchId) {
         socket.emit('competitive:ready', { matchId: currentMatchId });
         $('#comp-ready-btn').classList.add('hidden');
@@ -1966,8 +2025,106 @@
     }
   }
 
+  // ─── Competitive song selection timer ──────────
+  function startCompSongTimer(deadline) {
+    var timerEl = $('#comp-song-timer');
+    if (!timerEl) return;
+    if (compSongTimerInterval) clearInterval(compSongTimerInterval);
+    function updateTimer() {
+      var remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      timerEl.textContent = remaining + 's';
+      timerEl.className = 'comp-song-timer' + (remaining <= 5 ? ' urgent' : '');
+      if (remaining <= 0) {
+        clearInterval(compSongTimerInterval);
+        compSongTimerInterval = null;
+        timerEl.textContent = 'Time!';
+      }
+    }
+    updateTimer();
+    compSongTimerInterval = setInterval(updateTimer, 1000);
+  }
+
+  // ─── Slot machine animation for song reveal ──────
+  function showSlotMachine(allSongs, chosenSong, callback) {
+    var overlay = document.createElement('div');
+    overlay.className = 'slot-machine-overlay';
+    overlay.innerHTML =
+      '<div class="slot-machine-container">' +
+        '<h2 class="slot-machine-title">Selecting Song...</h2>' +
+        '<div class="slot-machine-window">' +
+          '<div class="slot-machine-card">' +
+            '<div class="slot-card-img-wrap"></div>' +
+            '<div class="slot-card-title"></div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+
+    document.body.appendChild(overlay);
+
+    var cardImgWrap = overlay.querySelector('.slot-card-img-wrap');
+    var cardTitle = overlay.querySelector('.slot-card-title');
+    var titleEl = overlay.querySelector('.slot-machine-title');
+    var card = overlay.querySelector('.slot-machine-card');
+
+    // Build cycle list — repeat songs to fill ~20+ steps, end with chosen
+    var pool = allSongs && allSongs.length > 0 ? allSongs.slice() : [chosenSong];
+    var items = [];
+    var totalSteps = Math.max(18, pool.length * 4);
+    for (var i = 0; i < totalSteps; i++) {
+      items.push(pool[i % pool.length]);
+    }
+    items.push(chosenSong); // ensure last item is the chosen one
+
+    var idx = 0;
+    var total = items.length;
+
+    function showItem(i) {
+      var song = items[i];
+      card.classList.remove('slot-flip');
+      void card.offsetWidth; // trigger reflow for re-animation
+      card.classList.add('slot-flip');
+      if (song.thumbnail) {
+        cardImgWrap.innerHTML = '<img class="slot-card-img" src="' + escapeHtml(song.thumbnail) + '" alt="">';
+      } else {
+        cardImgWrap.innerHTML = '<div class="slot-card-placeholder">\u266A</div>';
+      }
+      cardTitle.textContent = song.title || 'Unknown';
+    }
+
+    function step() {
+      showItem(idx);
+      idx++;
+      if (idx >= total) {
+        // Landed on chosen song
+        titleEl.textContent = '\uD83C\uDFB5 Selected!';
+        card.classList.add('slot-selected');
+        setTimeout(function () {
+          overlay.classList.add('fade-out');
+          setTimeout(function () {
+            overlay.remove();
+            callback();
+          }, 600);
+        }, 1500);
+        return;
+      }
+      // Exponential deceleration: fast at start, slow near end
+      var progress = idx / total;
+      var delay = 60 + Math.pow(progress, 3) * 600;
+      setTimeout(step, delay);
+    }
+
+    step();
+  }
+
   // ─── Song intro overlay for competitive ─────────
   function showSongIntro(song, opponentName, callback) {
+    // Clean up any previous intro
+    if (activeSongIntro) {
+      clearInterval(activeSongIntro.interval);
+      if (activeSongIntro.overlay.parentNode) activeSongIntro.overlay.remove();
+      activeSongIntro = null;
+    }
+
     var overlay = document.createElement('div');
     overlay.className = 'song-intro-overlay';
 
@@ -1989,8 +2146,10 @@
     var hudName = $('#opp-hud-name');
     if (hudName && opponentName) hudName.textContent = opponentName;
     // Reset HUD values
-    $('#opp-hud-score').textContent = '0';
-    $('#opp-hud-combo').textContent = '0';
+    var hudScore = document.getElementById('opp-hud-score');
+    var hudCombo = document.getElementById('opp-hud-combo');
+    if (hudScore) hudScore.textContent = '0';
+    if (hudCombo) hudCombo.textContent = '0';
 
     var count = 5;
     var countEl = overlay.querySelector('#intro-countdown');
@@ -2003,10 +2162,13 @@
         overlay.classList.add('fade-out');
       } else {
         clearInterval(interval);
+        activeSongIntro = null;
         overlay.remove();
         callback();
       }
     }, 1000);
+
+    activeSongIntro = { interval: interval, overlay: overlay };
   }
 
   // ─── Utility ─────────────────────────────────────
