@@ -68,7 +68,7 @@
     _suppressHash = false;
     if (hash === 'leaderboard') { loadLeaderboard(); }
     if (hash === 'friends') { loadFriends(); }
-    if (hash === 'competitive') { loadRankings(); }
+    if (hash === 'competitive') { loadRankings(); resetCompetitiveScreen(); }
     return true;
   }
 
@@ -910,6 +910,7 @@
       if (socket) { socket.disconnect(); socket = null; }
       compGameMode = false;
       currentMatchId = null;
+      inQueue = false;
       var hud = $('#comp-opponent-hud');
       if (hud) hud.classList.remove('active');
       showScreen('auth');
@@ -921,6 +922,7 @@
   var socket = null;
   var currentMatchId = null;
   var compGameMode = false;
+  var inQueue = false;
 
   function connectSocket() {
     if (socket) return;
@@ -958,8 +960,15 @@
 
     // Competitive events
     socket.on('competitive:matched', function (data) {
+      inQueue = false;
       currentMatchId = data.matchId;
       compOpponentName = data.opponent;
+      // Reset lobby state for new match
+      $('#comp-song-results').innerHTML = '';
+      $('#comp-song-search').value = '';
+      $('#comp-song-waiting').classList.add('hidden');
+      $('#comp-ready-btn').classList.remove('hidden');
+      $('#comp-ready-waiting').classList.add('hidden');
       showScreen('comp-lobby');
       showLobbySection('comp-song-select');
       $('#comp-opponent-name').textContent = data.opponent;
@@ -998,13 +1007,69 @@
 
     socket.on('competitive:results', function (data) {
       compGameMode = false;
+      currentMatchId = null;
       showScreen('comp-results');
       showCompResults(data);
+    });
+
+    // Match state recovery on reconnect
+    socket.on('match:stateSync', function (data) {
+      currentMatchId = data.matchId;
+      compOpponentName = data.opponent;
+      $('#comp-opponent-name').textContent = data.opponent;
+
+      if (data.status === 'songSelect') {
+        showScreen('comp-lobby');
+        if (data.hasSongSelected) {
+          showLobbySection('comp-song-select');
+          $('#comp-song-results').innerHTML = '<p class="empty-msg">Song picked! Waiting for opponent...</p>';
+          $('#comp-song-waiting').classList.remove('hidden');
+        } else {
+          showLobbySection('comp-song-select');
+        }
+      } else if (data.status === 'ready') {
+        showScreen('comp-lobby');
+        showLobbySection('comp-ready');
+        if (data.chosenSong) {
+          compChosenSong = data.chosenSong;
+          $('#comp-chosen-song').textContent = data.chosenSong.title;
+        }
+        if (data.isReady) {
+          $('#comp-ready-btn').classList.add('hidden');
+          $('#comp-ready-waiting').classList.remove('hidden');
+        } else {
+          $('#comp-ready-btn').classList.remove('hidden');
+          $('#comp-ready-waiting').classList.add('hidden');
+        }
+      } else if (data.status === 'playing') {
+        compGameMode = true;
+        if (data.chosenSong) compChosenSong = data.chosenSong;
+      }
+    });
+
+    // Opponent left match
+    socket.on('competitive:opponentLeft', function () {
+      toast('Opponent left the match', 'info');
+      currentMatchId = null;
+      compGameMode = false;
+      inQueue = false;
+      var hud = $('#comp-opponent-hud');
+      if (hud) hud.classList.remove('active');
+      showScreen('competitive');
+      resetCompetitiveScreen();
+      loadRankings();
     });
   }
 
   var compChosenSong = null;
   var compOpponentName = '';
+
+  function resetCompetitiveScreen() {
+    if (!inQueue) {
+      $('#comp-find-match').classList.remove('hidden');
+      $('#comp-queue-status').classList.add('hidden');
+    }
+  }
 
   function showLobbySection(sectionId) {
     var sections = ['comp-song-select', 'comp-ready'];
@@ -1457,25 +1522,34 @@
     $('#btn-go-competitive').addEventListener('click', function () {
       if (!currentUser) { toast('Log in to play competitive', 'error'); return; }
       showScreen('competitive');
+      resetCompetitiveScreen();
       loadRankings();
     });
     $('#btn-back-from-comp').addEventListener('click', function () {
       if (socket) socket.emit('competitive:dequeue');
+      inQueue = false;
       showScreen('library');
     });
     $('#btn-back-from-lobby').addEventListener('click', function () {
       // Cancel match / leave lobby
+      if (socket && currentMatchId) socket.emit('competitive:abandon');
       if (socket) socket.emit('competitive:dequeue');
+      currentMatchId = null;
+      inQueue = false;
       showScreen('competitive');
+      resetCompetitiveScreen();
+      loadRankings();
     });
     $('#comp-find-match').addEventListener('click', function () {
       if (!socket) { toast('Not connected', 'error'); return; }
       socket.emit('competitive:queue');
+      inQueue = true;
       $('#comp-find-match').classList.add('hidden');
       $('#comp-queue-status').classList.remove('hidden');
     });
     $('#comp-cancel-queue').addEventListener('click', function () {
       if (socket) socket.emit('competitive:dequeue');
+      inQueue = false;
       $('#comp-find-match').classList.remove('hidden');
       $('#comp-queue-status').classList.add('hidden');
     });
@@ -1498,8 +1572,8 @@
     });
     $('#comp-back-to-queue').addEventListener('click', function () {
       showScreen('competitive');
-      $('#comp-find-match').classList.remove('hidden');
-      $('#comp-queue-status').classList.add('hidden');
+      inQueue = false;
+      resetCompetitiveScreen();
       loadRankings();
     });
     var rematchBtn = document.getElementById('comp-rematch-btn');
@@ -1507,6 +1581,7 @@
       rematchBtn.addEventListener('click', function () {
         if (!socket) { toast('Not connected', 'error'); return; }
         showScreen('competitive');
+        inQueue = true;
         $('#comp-find-match').classList.add('hidden');
         $('#comp-queue-status').classList.remove('hidden');
         socket.emit('competitive:queue');

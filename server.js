@@ -1067,6 +1067,7 @@ app.get('/api/rankings', async (req, res) => {
 const onlineUsers = new Map();    // username → socket
 const matchQueue = [];            // [{ username, socket, mmr }]
 const activeMatches = new Map();  // matchId → match state
+const userMatches = new Map();    // username → matchId
 
 function calcElo(winnerMmr, loserMmr, k) {
   k = k || 32;
@@ -1085,6 +1086,26 @@ io.on('connection', (socket) => {
     authedUser = user.username;
     onlineUsers.set(authedUser, socket);
     socket.emit('auth:ok', { username: authedUser });
+
+    // If user is in an active match, sync state on reconnect
+    const activeMatchId = userMatches.get(authedUser);
+    if (activeMatchId) {
+      const match = activeMatches.get(activeMatchId);
+      if (match && match.status !== 'finished') {
+        const opponent = match.player1 === authedUser ? match.player2 : match.player1;
+        const isP1 = match.player1 === authedUser;
+        socket.emit('match:stateSync', {
+          matchId: activeMatchId,
+          opponent,
+          status: match.status,
+          chosenSong: match.chosenSong || null,
+          hasSongSelected: isP1 ? !!match.p1Song : !!match.p2Song,
+          isReady: isP1 ? match.p1Ready : match.p2Ready,
+        });
+      } else {
+        userMatches.delete(authedUser);
+      }
+    }
   });
 
   socket.on('competitive:queue', () => {
@@ -1172,6 +1193,8 @@ io.on('connection', (socket) => {
 
     if (match.p1Results && match.p2Results) {
       match.status = 'finished';
+      userMatches.delete(match.player1);
+      userMatches.delete(match.player2);
       // Determine winner
       let winner = null, loser = null;
       if (match.p1Results.score > match.p2Results.score) {
@@ -1244,6 +1267,8 @@ io.on('connection', (socket) => {
       createdAt: new Date(),
     };
     activeMatches.set(matchId, match);
+    userMatches.set(data.from, matchId);
+    userMatches.set(authedUser, matchId);
     challengerSocket.emit('competitive:matched', { matchId, opponent: authedUser });
     socket.emit('competitive:matched', { matchId, opponent: data.from });
   });
@@ -1254,9 +1279,49 @@ io.on('connection', (socket) => {
     if (challengerSocket) challengerSocket.emit('challenge:declined', { username: authedUser });
   });
 
+  socket.on('competitive:abandon', () => {
+    if (!authedUser) return;
+    const matchId = userMatches.get(authedUser);
+    if (!matchId) return;
+    const match = activeMatches.get(matchId);
+    if (!match || match.status === 'finished') return;
+
+    const opponent = match.player1 === authedUser ? match.player2 : match.player1;
+    const opponentSocket = onlineUsers.get(opponent);
+    if (opponentSocket) opponentSocket.emit('competitive:opponentLeft');
+
+    match.status = 'finished';
+    userMatches.delete(match.player1);
+    userMatches.delete(match.player2);
+    activeMatches.delete(matchId);
+  });
+
   socket.on('disconnect', () => {
     if (authedUser) {
-      onlineUsers.delete(authedUser);
+      // Only remove if this socket is still the active one (prevents race on reconnect)
+      if (onlineUsers.get(authedUser) === socket) {
+        onlineUsers.delete(authedUser);
+
+        // If in an active match, notify opponent after a grace period for reconnection
+        const matchId = userMatches.get(authedUser);
+        if (matchId) {
+          setTimeout(() => {
+            // Check if user reconnected during grace period
+            if (!onlineUsers.has(authedUser)) {
+              const match = activeMatches.get(matchId);
+              if (match && match.status !== 'finished' && match.status !== 'playing') {
+                const opponent = match.player1 === authedUser ? match.player2 : match.player1;
+                const opponentSocket = onlineUsers.get(opponent);
+                if (opponentSocket) opponentSocket.emit('competitive:opponentLeft');
+                match.status = 'finished';
+                userMatches.delete(match.player1);
+                userMatches.delete(match.player2);
+                activeMatches.delete(matchId);
+              }
+            }
+          }, 5000);
+        }
+      }
       const idx = matchQueue.findIndex(q => q.username === authedUser);
       if (idx !== -1) matchQueue.splice(idx, 1);
     }
@@ -1280,6 +1345,8 @@ function tryMatchmaking() {
       createdAt: new Date(),
     };
     activeMatches.set(matchId, match);
+    userMatches.set(p1.username, matchId);
+    userMatches.set(p2.username, matchId);
     p1.socket.emit('competitive:matched', { matchId, opponent: p2.username, opponentMmr: p2.mmr });
     p2.socket.emit('competitive:matched', { matchId, opponent: p1.username, opponentMmr: p1.mmr });
   }
